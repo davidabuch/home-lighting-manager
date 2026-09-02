@@ -291,38 +291,42 @@ script:
   home_lighting_main_area_off:
     alias: "Home Lighting - Main Area Off"
     description: >
-      Turns off managed Main Area lighting while preserving the
-      existing liquor-cabinet door-open lighting behavior.
+      Turns off the Hue Main Area as one grouped-light command for
+      synchronized and reliable shutdown. If a liquor-cabinet door is
+      open, the functional bright-white cabinet override is immediately
+      reasserted after the group turns off.
     mode: restart
 
     sequence:
-      - parallel:
 
-          - action: light.turn_off
-            target:
-              entity_id:
-                - light.kitchen_kitchen_left_cabinet_light
-                - light.kitchen_kitchen_right_cabinet_lights
-                - light.living_room_living_room_left_cabinets
-                - light.living_room_living_room_right_cabinet_lights
-                - light.living_room_left_ceiling_light
-                - light.living_room_living_room_right_ceiling
-            data:
-              transition: 0
+      # Use the native Hue grouped-light entity instead of commanding
+      # individual members one-by-one. This produces a single bridge-side
+      # group command and avoids occasional partial shutdowns.
+      - action: light.turn_off
+        target:
+          entity_id: light.holiday_main_area
+        data:
+          transition: 0
 
-          - if:
+      # The liquor cabinet remains a functional exception while a door
+      # is open. Reassert it after the grouped Main Area OFF command.
+      - if:
+          - condition: or
+            conditions:
               - condition: state
                 entity_id: binary_sensor.liquor_cabinet_door_r
-                state: "off"
+                state: "on"
               - condition: state
                 entity_id: binary_sensor.liquor_cabinet_l_door
-                state: "off"
-            then:
-              - action: light.turn_off
-                target:
-                  entity_id: light.living_room_liquor_cabinet_light
-                data:
-                  transition: 0
+                state: "on"
+        then:
+          - action: light.turn_on
+            target:
+              entity_id: light.living_room_liquor_cabinet_light
+            data:
+              brightness: 255
+              color_temp_kelvin: 4000
+              transition: 0
 
 
   # ============================================================
@@ -357,15 +361,14 @@ script:
   home_lighting_apply_pillar_baseline:
     alias: "Home Lighting - Apply Pillar Baseline"
     description: >
-      Applies the validated everyday pillar-light configuration.
+      Applies the validated everyday pillar-light configuration using
+      the native Hue grouped-light entity for synchronized control.
     mode: restart
 
     sequence:
       - action: light.turn_on
         target:
-          entity_id:
-            - light.front_yard_pillar_light_1
-            - light.front_yard_pillar_light_2
+          entity_id: light.pillar_lights
         data:
           brightness: 179
           color_temp_kelvin: 2207
@@ -380,15 +383,14 @@ script:
   home_lighting_pillar_off:
     alias: "Home Lighting - Pillar Off"
     description: >
-      Turns off both front-yard pillar lights.
+      Turns off both front-yard pillar lights using the native Hue
+      grouped-light entity for synchronized control.
     mode: restart
 
     sequence:
       - action: light.turn_off
         target:
-          entity_id:
-            - light.front_yard_pillar_light_1
-            - light.front_yard_pillar_light_2
+          entity_id: light.pillar_lights
         data:
           transition: 0
 
@@ -1868,6 +1870,27 @@ automation:
               - condition: trigger
                 id: overnight_boundary
             sequence:
+
+              # 01:59 is the authoritative nightly shutdown boundary.
+              # Homeowner Manual ownership is intentionally evening-scoped:
+              # it may override automatic owners during the lighting window,
+              # but it must not preserve lighting into the following day.
+              - action: input_boolean.turn_off
+                target:
+                  entity_id:
+                    - input_boolean.home_lighting_manual_main_area
+                    - input_boolean.home_lighting_manual_front_eve
+                    - input_boolean.home_lighting_manual_path
+                    - input_boolean.home_lighting_manual_backyard
+
+              # Clear the retained Main Area raw-Hue scene context when
+              # overnight Manual ownership is released.
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.home_lighting_manual_main_area_scene_id
+                data:
+                  value: ""
+
               - action: input_boolean.turn_off
                 target:
                   entity_id:

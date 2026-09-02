@@ -1,0 +1,9 @@
+{
+  "domain": "home_hue_scene_monitor",
+  "name": "Home Hue Scene Monitor",
+  "version": "0.1.0",
+  "config_flow": true,
+  "dependencies": ["hue"],
+  "codeowners": [],
+  "iot_class": "local_polling"
+}

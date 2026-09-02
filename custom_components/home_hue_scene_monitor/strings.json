@@ -1,0 +1,15 @@
+{
+  "title": "Home Hue Scene Monitor",
+  "config": {
+    "abort": {
+      "already_configured": "Home Hue Scene Monitor is already configured.",
+      "hue_v2_not_found": "No configured Philips Hue V2 bridge was found."
+    },
+    "step": {
+      "user": {
+        "title": "Home Hue Scene Monitor",
+        "description": "Use the existing Philips Hue bridge to monitor raw Hue scene recalls."
+      }
+    }
+  }
+}

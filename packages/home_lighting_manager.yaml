@@ -1,0 +1,1933 @@
+# Home Lighting Manager
+# Priority Engine v1.2
+#
+# Current priority:
+#   LIVE 49ERS GAME
+#       >
+#   DAILY BASELINE
+#       >
+#   OFF
+#
+# Holiday priority will be inserted between 49ERS and DAILY
+# in a subsequent version.
+#
+# Baseline windows:
+#   Main Area: sunset - 15 minutes through 01:59
+#   Front Eve: sunset through 01:59
+#
+# Hue remains the scene/effect renderer for special scenes.
+# Home Assistant owns scheduling and priority decisions.
+
+input_boolean:
+
+  home_lighting_main_area_window:
+    name: "Home Lighting Main Area Window"
+
+  home_lighting_front_eve_window:
+    name: "Home Lighting Front Eve Window"
+
+  home_lighting_pillar_window:
+    name: "Home Lighting Pillar Window"
+
+  home_lighting_path_window:
+    name: "Home Lighting Driveway Path Window"
+
+  home_lighting_backyard_window:
+    name: "Home Lighting Backyard Window"
+
+
+  # ============================================================
+  # AUTOMATIC MANUAL-OWNERSHIP STATE
+  #
+  # These helpers are maintained by Home Lighting Manager.
+  # The homeowner does NOT need to toggle them manually.
+  # ============================================================
+
+  home_lighting_manual_main_area:
+    name: "Home Lighting Manual Main Area"
+
+  home_lighting_manual_front_eve:
+    name: "Home Lighting Manual Front Eve"
+
+  home_lighting_manual_path:
+    name: "Home Lighting Manual Path"
+
+  home_lighting_manual_backyard:
+    name: "Home Lighting Manual Backyard"
+
+
+  # ============================================================
+  # HOLIDAY OWNERSHIP
+  # ============================================================
+
+  home_lighting_holiday_active:
+    name: "Home Lighting Holiday Active"
+
+  # ============================================================
+  # INTERNAL HA COMMAND GUARDS
+  #
+  # Used to distinguish an HA-owned OFF->ON transition from an
+  # external Hue/Homeowner OFF->ON transition.
+  # ============================================================
+
+  home_lighting_ha_guard_main_area:
+    name: "Home Lighting HA Guard Main Area"
+
+  home_lighting_ha_guard_front_eve:
+    name: "Home Lighting HA Guard Front Eve"
+
+  home_lighting_ha_guard_path:
+    name: "Home Lighting HA Guard Path"
+
+  home_lighting_ha_guard_backyard:
+    name: "Home Lighting HA Guard Backyard"
+
+
+  # ============================================================
+  # LIQUOR CABINET MANUAL-STATE SNAPSHOT
+  #
+  # Used only while Main Area is under automatic Manual ownership.
+  # When a cabinet door opens, the current liquor bulb appearance
+  # is stored here before the bulb is temporarily forced to 4000K.
+  # ============================================================
+
+  home_lighting_liquor_snapshot_valid:
+    name: "Home Lighting Liquor Snapshot Valid"
+
+  home_lighting_liquor_snapshot_was_on:
+    name: "Home Lighting Liquor Snapshot Was On"
+
+
+input_text:
+
+  home_lighting_holiday_key:
+    name: "Home Lighting Holiday Key"
+    max: 40
+
+  home_lighting_manual_main_area_scene_id:
+    name: "Home Lighting Manual Main Area Scene ID"
+    max: 64
+
+  home_lighting_liquor_snapshot_color_mode:
+    name: "Home Lighting Liquor Snapshot Color Mode"
+    max: 32
+
+
+input_number:
+
+  home_lighting_liquor_snapshot_brightness:
+    name: "Home Lighting Liquor Snapshot Brightness"
+    min: 0
+    max: 255
+    step: 1
+
+  home_lighting_liquor_snapshot_color_temp_kelvin:
+    name: "Home Lighting Liquor Snapshot Color Temp Kelvin"
+    min: 2000
+    max: 6535
+    step: 1
+
+  home_lighting_liquor_snapshot_x:
+    name: "Home Lighting Liquor Snapshot X"
+    min: 0
+    max: 1
+    step: 0.0001
+
+  home_lighting_liquor_snapshot_y:
+    name: "Home Lighting Liquor Snapshot Y"
+    min: 0
+    max: 1
+    step: 0.0001
+
+
+script:
+
+  # ============================================================
+  # FRONT EVE BASELINE
+  # ============================================================
+
+  home_lighting_apply_front_eve_baseline:
+    alias: "Home Lighting - Apply Front Eve Baseline"
+    description: >
+      Applies the validated everyday Front Eve Festavia configuration.
+    mode: restart
+
+    sequence:
+      - action: light.turn_on
+        target:
+          entity_id: light.front_yard_front_eve_lights
+        data:
+          brightness: 165
+          color_temp_kelvin: 2724
+          effect: "off"
+          transition: 0
+
+
+  # ============================================================
+  # FRONT EVE OFF
+  # ============================================================
+
+  home_lighting_front_eve_off:
+    alias: "Home Lighting - Front Eve Off"
+    description: >
+      Turns off the Front Eve Festavia.
+    mode: restart
+
+    sequence:
+      - action: light.turn_off
+        target:
+          entity_id: light.front_yard_front_eve_lights
+        data:
+          transition: 0
+
+
+  # ============================================================
+  # MAIN AREA BASELINE
+  # ============================================================
+
+  home_lighting_apply_main_area_baseline:
+    alias: "Home Lighting - Apply Main Area Baseline"
+    description: >
+      Applies the validated everyday Main Area lighting configuration.
+    mode: restart
+
+    sequence:
+      - parallel:
+
+          # Kitchen Left Cabinet
+          - action: light.turn_on
+            target:
+              entity_id: light.kitchen_kitchen_left_cabinet_light
+            data:
+              brightness: 255
+              color_temp_kelvin: 2724
+              effect: "off"
+              transition: 0
+
+          # Kitchen Right Cabinets
+          - action: light.turn_on
+            target:
+              entity_id: light.kitchen_kitchen_right_cabinet_lights
+            data:
+              brightness: 255
+              color_temp_kelvin: 2724
+              effect: "off"
+              transition: 0
+
+          # Living Room Left Cabinets
+          - action: light.turn_on
+            target:
+              entity_id: light.living_room_living_room_left_cabinets
+            data:
+              brightness: 183
+              xy_color:
+                - 0.4711
+                - 0.3867
+              effect: "off"
+              transition: 0
+
+          # Living Room Right Cabinets
+          - action: light.turn_on
+            target:
+              entity_id: light.living_room_living_room_right_cabinet_lights
+            data:
+              brightness: 183
+              xy_color:
+                - 0.4711
+                - 0.3867
+              effect: "off"
+              transition: 0
+
+          # Liquor Cabinet
+          # Existing door-open automation remains authoritative.
+          - if:
+              - condition: state
+                entity_id: binary_sensor.liquor_cabinet_door_r
+                state: "off"
+              - condition: state
+                entity_id: binary_sensor.liquor_cabinet_l_door
+                state: "off"
+            then:
+              - action: light.turn_on
+                target:
+                  entity_id: light.living_room_liquor_cabinet_light
+                data:
+                  brightness: 183
+                  xy_color:
+                    - 0.4710
+                    - 0.3866
+                  effect: "off"
+                  transition: 0
+
+          # Living Room Left Ceiling
+          - action: light.turn_on
+            target:
+              entity_id: light.living_room_left_ceiling_light
+            data:
+              brightness: 43
+              xy_color:
+                - 0.4711
+                - 0.3867
+              effect: "off"
+              transition: 0
+
+          # Living Room Right Ceiling
+          - action: light.turn_on
+            target:
+              entity_id: light.living_room_living_room_right_ceiling
+            data:
+              brightness: 43
+              xy_color:
+                - 0.4711
+                - 0.3867
+              effect: "off"
+              transition: 0
+
+
+  # ============================================================
+  # MAIN AREA OFF
+  # ============================================================
+
+  home_lighting_main_area_off:
+    alias: "Home Lighting - Main Area Off"
+    description: >
+      Turns off managed Main Area lighting while preserving the
+      existing liquor-cabinet door-open lighting behavior.
+    mode: restart
+
+    sequence:
+      - parallel:
+
+          - action: light.turn_off
+            target:
+              entity_id:
+                - light.kitchen_kitchen_left_cabinet_light
+                - light.kitchen_kitchen_right_cabinet_lights
+                - light.living_room_living_room_left_cabinets
+                - light.living_room_living_room_right_cabinet_lights
+                - light.living_room_left_ceiling_light
+                - light.living_room_living_room_right_ceiling
+            data:
+              transition: 0
+
+          - if:
+              - condition: state
+                entity_id: binary_sensor.liquor_cabinet_door_r
+                state: "off"
+              - condition: state
+                entity_id: binary_sensor.liquor_cabinet_l_door
+                state: "off"
+            then:
+              - action: light.turn_off
+                target:
+                  entity_id: light.living_room_liquor_cabinet_light
+                data:
+                  transition: 0
+
+
+  # ============================================================
+  # HA COMMAND GUARD RE-ARM
+  #
+  # Every HA-owned lighting command gets a fresh correlation
+  # window. The brief OFF -> ON cycle is intentional.
+  # ============================================================
+
+  home_lighting_rearm_ha_guard:
+    alias: "Home Lighting - Rearm HA Guard"
+    mode: parallel
+    max: 20
+    fields:
+      guard_entity:
+        required: true
+
+    sequence:
+      - action: input_boolean.turn_off
+        target:
+          entity_id: "{{ guard_entity }}"
+
+      - action: input_boolean.turn_on
+        target:
+          entity_id: "{{ guard_entity }}"
+
+
+  # ============================================================
+  # PILLAR BASELINE
+  # ============================================================
+
+  home_lighting_apply_pillar_baseline:
+    alias: "Home Lighting - Apply Pillar Baseline"
+    description: >
+      Applies the validated everyday pillar-light configuration.
+    mode: restart
+
+    sequence:
+      - action: light.turn_on
+        target:
+          entity_id:
+            - light.front_yard_pillar_light_1
+            - light.front_yard_pillar_light_2
+        data:
+          brightness: 179
+          color_temp_kelvin: 2207
+          effect: "candle"
+          transition: 0
+
+
+  # ============================================================
+  # PILLAR OFF
+  # ============================================================
+
+  home_lighting_pillar_off:
+    alias: "Home Lighting - Pillar Off"
+    description: >
+      Turns off both front-yard pillar lights.
+    mode: restart
+
+    sequence:
+      - action: light.turn_off
+        target:
+          entity_id:
+            - light.front_yard_pillar_light_1
+            - light.front_yard_pillar_light_2
+        data:
+          transition: 0
+
+
+  # ============================================================
+  # DRIVEWAY PATH BASELINE
+  #
+  # Hue remains responsible for rendering the native dynamic
+  # Meriete palette. HA owns when that scene is active.
+  # ============================================================
+
+  home_lighting_apply_path_baseline:
+    alias: "Home Lighting - Apply Driveway Path Baseline"
+    description: >
+      Activates the native Hue Meriete dynamic scene for all six
+      driveway path lights.
+    mode: restart
+
+    sequence:
+      - action: scene.turn_on
+        target:
+          entity_id: scene.driveway_path_lights_meriete
+
+
+  # ============================================================
+  # DRIVEWAY PATH OFF
+  # ============================================================
+
+  home_lighting_path_off:
+    alias: "Home Lighting - Driveway Path Off"
+    description: >
+      Turns off the six driveway path lights.
+    mode: restart
+
+    sequence:
+      - action: light.turn_off
+        target:
+          entity_id: light.driveway_path_lights
+        data:
+          transition: 0
+
+
+  # ============================================================
+  # DRIVEWAY PATH STATE APPLIER
+  # ============================================================
+
+  home_lighting_apply_path_state:
+    alias: "Home Lighting - Apply Driveway Path State"
+    description: >
+      Applies the authoritative Driveway Path owner. Automatic Manual
+      ownership suppresses HA daily/off commands until the homeowner
+      relinquishes control by turning the surface off.
+    mode: restart
+
+    variables:
+      holiday_key: >-
+        {{ states('input_text.home_lighting_holiday_key') }}
+
+      holiday_scene: >-
+        {% set scenes = {
+          'new_year': 'scene.holiday_path_golden_star',
+          'valentines_day': 'scene.holiday_path_valentines_day',
+          'st_patricks_day': 'scene.holiday_path_st_patricks_day',
+          'july_4': 'scene.holiday_path_4th_of_july',
+          'halloween': 'scene.holiday_path_trick_or_treat',
+          'thanksgiving': 'scene.holiday_path_pumpkin_spice',
+          'christmas': 'scene.holiday_path_jolly',
+          'hanukkah': 'scene.holiday_path_hanukkah'
+        } %}
+        {{ scenes.get(holiday_key, '') }}
+
+    sequence:
+
+      # Manual homeowner ownership is authoritative.
+      - if:
+          - condition: state
+            entity_id: input_boolean.home_lighting_manual_path
+            state: "on"
+        then:
+          - stop: "Homeowner Manual owns Holiday Path."
+
+      # Any command below is HA-owned.
+      - action: script.home_lighting_rearm_ha_guard
+        data:
+          guard_entity: input_boolean.home_lighting_ha_guard_path
+
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: input_boolean.home_lighting_holiday_active
+                state: "on"
+              - condition: template
+                value_template: "{{ holiday_scene | length > 0 }}"
+            sequence:
+              - action: scene.turn_on
+                target:
+                  entity_id: "{{ holiday_scene }}"
+
+        default:
+          - if:
+              - condition: state
+                entity_id: input_boolean.home_lighting_path_window
+                state: "on"
+            then:
+              - action: script.home_lighting_apply_path_baseline
+            else:
+              - action: script.home_lighting_path_off
+
+
+  # ============================================================
+  # BACKYARD DAILY BASELINE
+  #
+  # The Hue ROOM Forest adventure scene remains the source of
+  # truth for individual brightness levels, palette, and speed.
+  #
+  # This script must only be called when the Spa Gauge does NOT
+  # own the Backyard.
+  # ============================================================
+
+  home_lighting_apply_backyard_baseline:
+    alias: "Home Lighting - Apply Backyard Baseline"
+    description: >
+      Activates the native Hue Backyard ROOM Forest adventure
+      dynamic scene without overriding its per-light brightness
+      or dynamic speed.
+    mode: restart
+
+    sequence:
+      - action: scene.turn_on
+        target:
+          entity_id: scene.backyard_backyard_forest_adventure
+
+
+  # ============================================================
+  # BACKYARD OFF
+  # ============================================================
+
+  home_lighting_backyard_off:
+    alias: "Home Lighting - Backyard Off"
+    description: >
+      Turns off the Backyard when the Spa Gauge does not own it.
+    mode: restart
+
+    sequence:
+      - action: light.turn_off
+        target:
+          entity_id: light.backyard
+        data:
+          transition: 0
+
+
+  # ============================================================
+  # BACKYARD EVALUATOR
+  #
+  # Ownership:
+  #
+  #   SPA GAUGE ACTIVE
+  #       >
+  #   BACKYARD DAILY WINDOW
+  #       >
+  #   OFF
+  #
+  # Conservative ownership rule:
+  # If spa_gauge_active is ON, this script deliberately performs
+  # NO Backyard lighting action.
+  # ============================================================
+
+  home_lighting_evaluate_backyard:
+    alias: "Home Lighting - Evaluate Backyard"
+    description: >
+      Applies authoritative Backyard ownership:
+      Hue Sync > Homeowner Manual > Spa Gauge > Holiday > Daily > Off.
+    mode: restart
+
+    sequence:
+      - choose:
+
+          # ======================================================
+          # PRIORITY 1: HUE BACKYARD SYNC
+          # ======================================================
+          - conditions:
+              - condition: state
+                entity_id: binary_sensor.hue_bridge_backyard
+                state: "on"
+            sequence:
+              - stop: "Hue Backyard Sync owns Backyard."
+
+          # ======================================================
+          # PRIORITY 2: HOMEOWNER MANUAL
+          # ======================================================
+          - conditions:
+              - condition: state
+                entity_id: input_boolean.home_lighting_manual_backyard
+                state: "on"
+            sequence:
+              - stop: "Homeowner Manual owns Backyard."
+
+          # ======================================================
+          # PRIORITY 3: SPA GAUGE
+          # ======================================================
+          - conditions:
+              - condition: state
+                entity_id: input_boolean.spa_gauge_active
+                state: "on"
+            sequence:
+              - stop: "Spa Gauge owns Backyard."
+
+        default:
+
+          # Any command below is HA-owned.
+          - action: script.home_lighting_rearm_ha_guard
+            data:
+              guard_entity: input_boolean.home_lighting_ha_guard_backyard
+
+          - variables:
+              holiday_key: >-
+                {{ states('input_text.home_lighting_holiday_key') }}
+
+              holiday_scene: >-
+                {% set scenes = {
+                  'new_year': 'scene.holiday_backyard_golden_star',
+                  'valentines_day': 'scene.holiday_backyard_valentines_day',
+                  'st_patricks_day': 'scene.holiday_backyard_st_patricks_day',
+                  'july_4': 'scene.holiday_backyard_4th_of_july',
+                  'halloween': 'scene.holiday_backyard_trick_or_treat',
+                  'thanksgiving': 'scene.holiday_backyard_pumpkin_spice',
+                  'christmas': 'scene.holiday_backyard_jolly',
+                  'hanukkah': 'scene.holiday_backyard_hanukkah'
+                } %}
+                {{ scenes.get(holiday_key, '') }}
+
+          - choose:
+              - conditions:
+                  - condition: state
+                    entity_id: input_boolean.home_lighting_holiday_active
+                    state: "on"
+                  - condition: template
+                    value_template: "{{ holiday_scene | length > 0 }}"
+                sequence:
+                  - action: scene.turn_on
+                    target:
+                      entity_id: "{{ holiday_scene }}"
+
+            default:
+              - if:
+                  - condition: state
+                    entity_id: input_boolean.home_lighting_backyard_window
+                    state: "on"
+                then:
+                  - action: script.home_lighting_apply_backyard_baseline
+                else:
+                  - action: script.home_lighting_backyard_off
+
+
+  # ============================================================
+  # COMBINED DAILY BASELINE
+  # Useful for manual tests and future restoration workflows.
+  # ============================================================
+
+  home_lighting_apply_daily_baseline:
+    alias: "Home Lighting - Apply Daily Baseline"
+    description: >
+      Applies both the Main Area and Front Eve everyday baselines.
+    mode: restart
+
+    sequence:
+      - parallel:
+          - action: script.home_lighting_apply_main_area_baseline
+          - action: script.home_lighting_apply_front_eve_baseline
+
+
+  # ============================================================
+  # COMBINED OFF
+  # ============================================================
+
+  home_lighting_daily_off:
+    alias: "Home Lighting - Daily Off"
+    description: >
+      Turns off both managed baseline lighting areas.
+    mode: restart
+
+    sequence:
+      - parallel:
+          - action: script.home_lighting_main_area_off
+          - action: script.home_lighting_front_eve_off
+
+
+  # ============================================================
+  # CENTRAL PRIORITY EVALUATOR
+  #
+  # This is now the authority for deciding what these areas
+  # should display whenever an important condition changes.
+  #
+  # Current priority:
+  #
+  #   49ERS LIVE
+  #       >
+  #   DAILY BASELINE
+  #       >
+  #   OFF
+  #
+  # Holiday logic will be inserted here next.
+  # ============================================================
+
+  home_lighting_evaluate_and_apply:
+    alias: "Home Lighting - Evaluate and Apply"
+    description: >
+      Evaluates Main Area and Front Eve independently. Living Room Hue
+      Sync owns Main Area while active. Outside Sync, automatic Homeowner
+      Manual ownership supersedes 49ers, daily, and off. An open liquor
+      cabinet remains a functional bright-white overlay outside Sync.
+    mode: restart
+
+    variables:
+
+      main_area_baseline_eligible: >-
+        {{ is_state('input_boolean.home_lighting_main_area_window', 'on') }}
+
+      front_eve_baseline_eligible: >-
+        {{ is_state('input_boolean.home_lighting_front_eve_window', 'on') }}
+
+      living_room_sync_active: >-
+        {{ is_state('binary_sensor.hue_bridge_living_room', 'on') }}
+
+      manual_main_area_active: >-
+        {{ is_state('input_boolean.home_lighting_manual_main_area', 'on') }}
+
+      manual_front_eve_active: >-
+        {{ is_state('input_boolean.home_lighting_manual_front_eve', 'on') }}
+
+      liquor_cabinet_open: >-
+        {{
+          is_state('binary_sensor.liquor_cabinet_door_r', 'on')
+          or
+          is_state('binary_sensor.liquor_cabinet_l_door', 'on')
+        }}
+
+      game_live: >-
+        {{ is_state('sensor.nfl_san_francisco_49ers', 'IN') }}
+
+      holiday_active: >-
+        {{ is_state('input_boolean.home_lighting_holiday_active', 'on') }}
+
+      holiday_key: >-
+        {{ states('input_text.home_lighting_holiday_key') }}
+
+      holiday_main_scene: >-
+        {% set scenes = {
+          'new_year': 'scene.holiday_main_area_golden_star',
+          'valentines_day': 'scene.holiday_main_area_valentines_day',
+          'st_patricks_day': 'scene.holiday_main_area_st_patricks_day',
+          'july_4': 'scene.holiday_main_area_4th_of_july',
+          'halloween': 'scene.holiday_main_area_trick_or_treat',
+          'thanksgiving': 'scene.holiday_main_area_pumpkin_spice',
+          'christmas': 'scene.holiday_main_area_jolly',
+          'hanukkah': 'scene.holiday_main_area_hanukkah'
+        } %}
+        {{ scenes.get(holiday_key, '') }}
+
+      holiday_eve_scene: >-
+        {% set scenes = {
+          'new_year': 'scene.holiday_front_eve_zone_golden_star',
+          'valentines_day': 'scene.holiday_front_eve_zone_valentines_day',
+          'st_patricks_day': 'scene.holiday_front_eve_zone_st_patricks_day',
+          'july_4': 'scene.front_eve_zone_4th_of_july',
+          'halloween': 'scene.holiday_front_eve_zone_trick_or_treat',
+          'thanksgiving': 'scene.holiday_front_eve_zone_pumpkin_spice',
+          'christmas': 'scene.front_eve_zone_jolly',
+          'hanukkah': 'scene.front_eve_zone_hanukkah'
+        } %}
+        {{ scenes.get(holiday_key, '') }}
+
+    sequence:
+
+      # ==========================================================
+      # FRONT EVE OWNER
+      #
+      # Manual > 49ers > Daily > Off
+      # ==========================================================
+
+      - if:
+          - condition: template
+            value_template: "{{ not (manual_front_eve_active | bool) }}"
+        then:
+
+          - action: script.home_lighting_rearm_ha_guard
+            data:
+              guard_entity: input_boolean.home_lighting_ha_guard_front_eve
+
+          - choose:
+
+              - conditions:
+                  - condition: template
+                    value_template: "{{ game_live | bool }}"
+                sequence:
+                  - action: scene.turn_on
+                    target:
+                      entity_id: scene.front_eve_zone_49ers
+
+              - conditions:
+                  - condition: template
+                    value_template: >-
+                      {{
+                        holiday_active | bool
+                        and holiday_eve_scene | length > 0
+                      }}
+                sequence:
+                  - action: scene.turn_on
+                    target:
+                      entity_id: "{{ holiday_eve_scene }}"
+
+            default:
+
+              - if:
+                  - condition: template
+                    value_template: "{{ front_eve_baseline_eligible | bool }}"
+                then:
+                  - action: script.home_lighting_apply_front_eve_baseline
+                else:
+                  - action: script.home_lighting_front_eve_off
+
+
+      # ==========================================================
+      # MAIN AREA OWNER
+      #
+      # Hue Sync > Manual > 49ers > Daily > Off
+      # ==========================================================
+
+      - if:
+          - condition: template
+            value_template: >-
+              {{
+                not (living_room_sync_active | bool)
+                and not (manual_main_area_active | bool)
+              }}
+        then:
+
+          - action: script.home_lighting_rearm_ha_guard
+            data:
+              guard_entity: input_boolean.home_lighting_ha_guard_main_area
+
+          - choose:
+
+              - conditions:
+                  - condition: template
+                    value_template: "{{ game_live | bool }}"
+                sequence:
+                  - action: scene.turn_on
+                    target:
+                      entity_id: scene.holiday_main_area_49ers
+
+              - conditions:
+                  - condition: template
+                    value_template: >-
+                      {{
+                        holiday_active | bool
+                        and holiday_main_scene | length > 0
+                      }}
+                sequence:
+                  - action: scene.turn_on
+                    target:
+                      entity_id: "{{ holiday_main_scene }}"
+
+            default:
+
+              - if:
+                  - condition: template
+                    value_template: "{{ main_area_baseline_eligible | bool }}"
+                then:
+                  - action: script.home_lighting_apply_main_area_baseline
+                else:
+                  - action: script.home_lighting_main_area_off
+
+
+      # ==========================================================
+      # LIQUOR CABINET FUNCTIONAL OVERRIDE
+      #
+      # Living Room Sync is the sole exception.
+      # ==========================================================
+
+      - if:
+          - condition: template
+            value_template: >-
+              {{
+                liquor_cabinet_open | bool
+                and not (living_room_sync_active | bool)
+              }}
+        then:
+
+          - action: script.home_lighting_rearm_ha_guard
+            data:
+              guard_entity: input_boolean.home_lighting_ha_guard_main_area
+
+          - action: light.turn_on
+            target:
+              entity_id: light.living_room_liquor_cabinet_light
+            data:
+              brightness: 255
+              color_temp_kelvin: 4000
+              transition: 0
+
+
+  # ============================================================
+  # WINDOW RECONCILIATION
+  #
+  # Reconstructs the two lighting-window helpers after an HA
+  # restart so a missed solar trigger cannot leave them stale.
+  #
+  # This intentionally does NOT depend on sun.sun changing to
+  # below_horizon at exactly the same time as the sunset trigger.
+  # ============================================================
+
+  home_lighting_reconcile_windows:
+    alias: "Home Lighting - Reconcile Windows"
+    description: >
+      Reconstructs the Main Area and Front Eve lighting windows from
+      the current local time and Home Assistant's next sunset. Used
+      after Home Assistant startup to recover safely from solar/time
+      triggers that may have occurred while HA was offline.
+    mode: restart
+
+    variables:
+
+      main_area_should_be_on: >-
+        {% set clock = now().strftime('%H:%M:%S') %}
+        {% set raw_setting = state_attr('sun.sun', 'next_setting') %}
+        {% set next_setting = as_local(as_datetime(raw_setting)) if raw_setting else none %}
+
+        {% if clock < '01:59:00' %}
+          true
+        {% elif clock < '12:00:00' %}
+          false
+        {% elif next_setting is none %}
+          false
+        {% elif next_setting.date() > now().date() %}
+          true
+        {% else %}
+          {{ now() >= next_setting - timedelta(minutes=15) }}
+        {% endif %}
+
+      front_eve_should_be_on: >-
+        {% set clock = now().strftime('%H:%M:%S') %}
+        {% set raw_setting = state_attr('sun.sun', 'next_setting') %}
+        {% set next_setting = as_local(as_datetime(raw_setting)) if raw_setting else none %}
+
+        {% if clock < '01:59:00' %}
+          true
+        {% elif clock < '12:00:00' %}
+          false
+        {% elif next_setting is none %}
+          false
+        {% elif next_setting.date() > now().date() %}
+          true
+        {% else %}
+          {{ now() >= next_setting }}
+        {% endif %}
+
+
+      pillar_should_be_on: >-
+        {% set clock = now().strftime('%H:%M:%S') %}
+        {% set raw_setting = state_attr('sun.sun', 'next_setting') %}
+        {% set next_setting = as_local(as_datetime(raw_setting)) if raw_setting else none %}
+
+        {% if clock < '01:59:00' %}
+          true
+        {% elif clock < '12:00:00' %}
+          false
+        {% elif next_setting is none %}
+          false
+        {% elif next_setting.date() > now().date() %}
+          true
+        {% else %}
+          {{ now() >= next_setting }}
+        {% endif %}
+
+
+      path_should_be_on: >-
+        {% set clock = now().strftime('%H:%M:%S') %}
+        {% set raw_setting = state_attr('sun.sun', 'next_setting') %}
+        {% set next_setting = as_local(as_datetime(raw_setting)) if raw_setting else none %}
+
+        {% if clock < '01:59:00' %}
+          true
+        {% elif clock < '12:00:00' %}
+          false
+        {% elif next_setting is none %}
+          false
+        {% elif next_setting.date() > now().date() %}
+          true
+        {% else %}
+          {{ now() >= next_setting }}
+        {% endif %}
+
+
+      backyard_should_be_on: >-
+        {% set clock = now().strftime('%H:%M:%S') %}
+        {% set raw_setting = state_attr('sun.sun', 'next_setting') %}
+        {% set next_setting = as_local(as_datetime(raw_setting)) if raw_setting else none %}
+
+        {% if clock < '01:59:00' %}
+          true
+        {% elif clock < '12:00:00' %}
+          false
+        {% elif next_setting is none %}
+          false
+        {% elif next_setting.date() > now().date() %}
+          true
+        {% else %}
+          {{ now() >= next_setting }}
+        {% endif %}
+
+    sequence:
+
+      - parallel:
+
+          # MAIN AREA WINDOW
+          - if:
+              - condition: template
+                value_template: "{{ main_area_should_be_on | bool }}"
+            then:
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.home_lighting_main_area_window
+            else:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.home_lighting_main_area_window
+
+          # FRONT EVE WINDOW
+          - if:
+              - condition: template
+                value_template: "{{ front_eve_should_be_on | bool }}"
+            then:
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.home_lighting_front_eve_window
+            else:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.home_lighting_front_eve_window
+
+
+          # PILLAR WINDOW
+          - if:
+              - condition: template
+                value_template: "{{ pillar_should_be_on | bool }}"
+            then:
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.home_lighting_pillar_window
+            else:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.home_lighting_pillar_window
+
+
+          # DRIVEWAY PATH WINDOW
+          - if:
+              - condition: template
+                value_template: "{{ path_should_be_on | bool }}"
+            then:
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.home_lighting_path_window
+            else:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.home_lighting_path_window
+
+
+          # BACKYARD WINDOW
+          - if:
+              - condition: template
+                value_template: "{{ backyard_should_be_on | bool }}"
+            then:
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.home_lighting_backyard_window
+            else:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.home_lighting_backyard_window
+
+automation:
+
+  # ============================================================
+  # DAILY SOLAR/TIME EVENTS
+  #
+  # These no longer blindly turn lights on or off.
+  # Every event asks the central evaluator what should happen.
+  # ============================================================
+
+  # ==========================================================
+  # BACKYARD HUE SYNC OWNERSHIP
+  #
+  # Priority:
+  #   Hue Sync > Spa Gauge > Backyard Daily > Off
+  #
+  # Starting Sync requires no HA lighting command.
+  # The Spa Gauge Temperature Color automation independently
+  # restarts on the Sync state change and exits while Sync is ON.
+  #
+  # When Sync stops:
+  #   active spa session -> resume Spa Gauge
+  #   otherwise          -> reevaluate daily Backyard state
+  # ==========================================================
+
+  # ==========================================================
+  # LIVING ROOM HUE SYNC OWNERSHIP
+  #
+  # Sync > Liquor Cabinet > 49ers > Holiday > Daily > Off
+  #
+  # When Sync stops, the central evaluator reconstructs the
+  # appropriate lower-priority Main Area state.
+  # ==========================================================
+
+  - id: home_lighting_living_room_sync_ownership_v1
+    alias: "Home Lighting - Living Room Sync Ownership"
+    description: >
+      Gives Hue Living Room Entertainment Sync highest priority over
+      Main Area lighting. When Sync stops, reevaluates 49ers, future
+      holiday, daily/off lighting and the liquor-cabinet override.
+    mode: restart
+
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.hue_bridge_living_room
+        to: "on"
+        id: sync_started
+
+      - trigger: state
+        entity_id: binary_sensor.hue_bridge_living_room
+        to: "off"
+        id: sync_stopped
+
+    actions:
+      - choose:
+
+          - conditions:
+              - condition: trigger
+                id: sync_started
+            sequence:
+              - stop: "Living Room Hue Sync now owns Main Area."
+
+          - conditions:
+              - condition: trigger
+                id: sync_stopped
+            sequence:
+              - action: script.home_lighting_evaluate_and_apply
+
+
+  - id: home_lighting_backyard_sync_ownership_v1
+    alias: "Home Lighting - Backyard Sync Ownership"
+    description: >
+      Gives the Hue Backyard Entertainment Area highest lighting
+      priority. When Sync releases ownership, restores either the
+      active Spa Gauge or the appropriate Backyard daily/off state.
+    mode: restart
+
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.hue_bridge_backyard
+        to: "on"
+        id: sync_started
+
+      - trigger: state
+        entity_id: binary_sensor.hue_bridge_backyard
+        to: "off"
+        id: sync_stopped
+
+    actions:
+      - choose:
+
+          - conditions:
+              - condition: trigger
+                id: sync_started
+            sequence:
+              - stop: "Hue Backyard Sync now owns Backyard."
+
+          - conditions:
+              - condition: trigger
+                id: sync_stopped
+            sequence:
+
+              - choose:
+
+                  - conditions:
+                      - condition: state
+                        entity_id: input_boolean.spa_gauge_active
+                        state: "on"
+                      - condition: state
+                        entity_id: climate.buch_family_spa_thermostat
+                        state: "heat"
+                    sequence:
+                      - action: automation.trigger
+                        target:
+                          entity_id: automation.spa_gauge_temperature_color
+                        data:
+                          skip_condition: false
+
+                default:
+                  - action: script.home_lighting_evaluate_backyard
+
+
+  # ==========================================================
+  # INTERNAL HA COMMAND-GUARD AUTO CLEAR
+  #
+  # One restartable automation per zone. Re-arming a zone cancels
+  # its previous countdown and starts a fresh 8-second correlation
+  # window, preventing stale timers from clearing a newer guard.
+  # ==========================================================
+
+  - id: home_lighting_ha_guard_main_area_auto_clear_v2
+    alias: "Home Lighting - HA Guard Main Area Auto Clear"
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.home_lighting_ha_guard_main_area
+        to: "on"
+    actions:
+      - delay:
+          seconds: 8
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.home_lighting_ha_guard_main_area
+
+
+  - id: home_lighting_ha_guard_front_eve_auto_clear_v2
+    alias: "Home Lighting - HA Guard Front Eve Auto Clear"
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.home_lighting_ha_guard_front_eve
+        to: "on"
+    actions:
+      - delay:
+          seconds: 8
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.home_lighting_ha_guard_front_eve
+
+
+  - id: home_lighting_ha_guard_path_auto_clear_v2
+    alias: "Home Lighting - HA Guard Path Auto Clear"
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.home_lighting_ha_guard_path
+        to: "on"
+    actions:
+      - delay:
+          seconds: 8
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.home_lighting_ha_guard_path
+
+
+  - id: home_lighting_ha_guard_backyard_auto_clear_v2
+    alias: "Home Lighting - HA Guard Backyard Auto Clear"
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.home_lighting_ha_guard_backyard
+        to: "on"
+    actions:
+      - delay:
+          seconds: 8
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.home_lighting_ha_guard_backyard
+
+
+  # ==========================================================
+  # AUTOMATIC MANUAL OWNERSHIP DETECTOR - PHASE 2
+  #
+  # External OFF -> ON asserts Manual.
+  # External ON  -> OFF relinquishes Manual and reevaluates.
+  # HA-owned transitions are ignored while the matching guard
+  # is active.
+  # ==========================================================
+
+  - id: home_lighting_manual_ownership_detector_v1
+    alias: "Home Lighting - Manual Ownership Detector"
+    description: >
+      Detects externally initiated OFF-to-ON and ON-to-OFF transitions
+      of managed Hue lighting surfaces. HA-command guards prevent
+      manager-owned transitions from being mistaken for homeowner Manual.
+      Turning a manually owned surface OFF relinquishes ownership and
+      triggers authoritative reevaluation after Hue settles.
+    mode: parallel
+    max: 20
+
+    triggers:
+
+      - trigger: state
+        entity_id: light.holiday_main_area
+        from: "off"
+        to: "on"
+        id: main_on
+
+      - trigger: state
+        entity_id: light.holiday_main_area
+        from: "on"
+        to: "off"
+        id: main_off
+
+      - trigger: state
+        entity_id: light.front_eve_zone
+        from: "off"
+        to: "on"
+        id: front_eve_on
+
+      - trigger: state
+        entity_id: light.front_eve_zone
+        from: "on"
+        to: "off"
+        id: front_eve_off
+
+      - trigger: state
+        entity_id: light.holiday_path
+        from: "off"
+        to: "on"
+        id: path_on
+
+      - trigger: state
+        entity_id: light.holiday_path
+        from: "on"
+        to: "off"
+        id: path_off
+
+      - trigger: state
+        entity_id: light.holiday_backyard
+        from: "off"
+        to: "on"
+        id: backyard_on
+
+      - trigger: state
+        entity_id: light.holiday_backyard
+        from: "on"
+        to: "off"
+        id: backyard_off
+
+      # ------------------------------------------------------
+      # RAW HUE V2 SCENE RECALL EVENTS
+      #
+      # These detect a homeowner scene recall even when the
+      # managed surface was already ON and therefore produced
+      # no OFF -> ON light-state transition.
+      # ------------------------------------------------------
+
+      - trigger: state
+        entity_id: sensor.main_area_last_recall
+        id: main_scene_recall
+
+      - trigger: state
+        entity_id: sensor.front_eve_last_recall
+        id: front_eve_scene_recall
+
+      - trigger: state
+        entity_id: sensor.path_last_recall
+        id: path_scene_recall
+
+      - trigger: state
+        entity_id: sensor.backyard_last_recall
+        id: backyard_scene_recall
+
+    conditions: []
+
+    actions:
+
+      - choose:
+
+          # ------------------------------------------------------
+          # MAIN AREA RAW HUE SCENE RECALL
+          # ------------------------------------------------------
+
+          - conditions:
+              - condition: trigger
+                id: main_scene_recall
+              - condition: state
+                entity_id: input_boolean.home_lighting_ha_guard_main_area
+                state: "off"
+              - condition: state
+                entity_id: binary_sensor.hue_bridge_living_room
+                state: "off"
+            sequence:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.home_lighting_manual_main_area_scene_id
+                data:
+                  value: >-
+                    {{
+                      state_attr(
+                        'sensor.main_area_last_recall',
+                        'scene_id'
+                      ) or ''
+                    }}
+
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.home_lighting_manual_main_area
+
+          # ------------------------------------------------------
+          # FRONT EVE RAW HUE SCENE RECALL
+          # ------------------------------------------------------
+
+          - conditions:
+              - condition: trigger
+                id: front_eve_scene_recall
+              - condition: state
+                entity_id: input_boolean.home_lighting_ha_guard_front_eve
+                state: "off"
+            sequence:
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.home_lighting_manual_front_eve
+
+          # ------------------------------------------------------
+          # PATH RAW HUE SCENE RECALL
+          # ------------------------------------------------------
+
+          - conditions:
+              - condition: trigger
+                id: path_scene_recall
+              - condition: state
+                entity_id: input_boolean.home_lighting_ha_guard_path
+                state: "off"
+            sequence:
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.home_lighting_manual_path
+
+          # ------------------------------------------------------
+          # BACKYARD RAW HUE SCENE RECALL
+          # ------------------------------------------------------
+
+          - conditions:
+              - condition: trigger
+                id: backyard_scene_recall
+              - condition: state
+                entity_id: input_boolean.home_lighting_ha_guard_backyard
+                state: "off"
+              - condition: state
+                entity_id: binary_sensor.hue_bridge_backyard
+                state: "off"
+            sequence:
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.home_lighting_manual_backyard
+
+          # ------------------------------------------------------
+          # MAIN AREA ASSERT
+          # ------------------------------------------------------
+
+          - conditions:
+              - condition: trigger
+                id: main_on
+              - condition: state
+                entity_id: input_boolean.home_lighting_ha_guard_main_area
+                state: "off"
+              - condition: state
+                entity_id: binary_sensor.hue_bridge_living_room
+                state: "off"
+            sequence:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.home_lighting_manual_main_area_scene_id
+                data:
+                  value: ""
+
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.home_lighting_manual_main_area
+
+          # ------------------------------------------------------
+          # MAIN AREA RELEASE
+          # ------------------------------------------------------
+
+          - conditions:
+              - condition: trigger
+                id: main_off
+              - condition: state
+                entity_id: input_boolean.home_lighting_ha_guard_main_area
+                state: "off"
+            sequence:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.home_lighting_manual_main_area
+
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.home_lighting_manual_main_area_scene_id
+                data:
+                  value: ""
+
+              - delay:
+                  seconds: 2
+
+              - action: script.home_lighting_evaluate_and_apply
+
+
+          # ------------------------------------------------------
+          # FRONT EVE ASSERT
+          # ------------------------------------------------------
+
+          - conditions:
+              - condition: trigger
+                id: front_eve_on
+              - condition: state
+                entity_id: input_boolean.home_lighting_ha_guard_front_eve
+                state: "off"
+            sequence:
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.home_lighting_manual_front_eve
+
+          # ------------------------------------------------------
+          # FRONT EVE RELEASE
+          # ------------------------------------------------------
+
+          - conditions:
+              - condition: trigger
+                id: front_eve_off
+              - condition: state
+                entity_id: input_boolean.home_lighting_ha_guard_front_eve
+                state: "off"
+            sequence:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.home_lighting_manual_front_eve
+              - delay:
+                  seconds: 2
+              - action: script.home_lighting_evaluate_and_apply
+
+
+          # ------------------------------------------------------
+          # PATH ASSERT
+          # ------------------------------------------------------
+
+          - conditions:
+              - condition: trigger
+                id: path_on
+              - condition: state
+                entity_id: input_boolean.home_lighting_ha_guard_path
+                state: "off"
+            sequence:
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.home_lighting_manual_path
+
+          # ------------------------------------------------------
+          # PATH RELEASE
+          # ------------------------------------------------------
+
+          - conditions:
+              - condition: trigger
+                id: path_off
+              - condition: state
+                entity_id: input_boolean.home_lighting_ha_guard_path
+                state: "off"
+            sequence:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.home_lighting_manual_path
+              - delay:
+                  seconds: 2
+              - action: script.home_lighting_apply_path_state
+
+
+          # ------------------------------------------------------
+          # BACKYARD ASSERT
+          # ------------------------------------------------------
+
+          - conditions:
+              - condition: trigger
+                id: backyard_on
+              - condition: state
+                entity_id: input_boolean.home_lighting_ha_guard_backyard
+                state: "off"
+              - condition: state
+                entity_id: binary_sensor.hue_bridge_backyard
+                state: "off"
+              - condition: state
+                entity_id: input_boolean.spa_gauge_active
+                state: "off"
+            sequence:
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.home_lighting_manual_backyard
+
+          # ------------------------------------------------------
+          # BACKYARD RELEASE
+          # ------------------------------------------------------
+
+          - conditions:
+              - condition: trigger
+                id: backyard_off
+              - condition: state
+                entity_id: input_boolean.home_lighting_ha_guard_backyard
+                state: "off"
+            sequence:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.home_lighting_manual_backyard
+              - delay:
+                  seconds: 2
+              - action: script.home_lighting_evaluate_backyard
+
+
+  - id: home_lighting_daily_schedule_v1
+    alias: "Home Lighting - Daily Schedule"
+    description: >
+      Reevaluates managed lighting 15 minutes before sunset, at
+      sunset, and at 01:59 local time. After Home Assistant startup,
+      reconstructs any lighting window transitions that may have been
+      missed while HA was offline. The central evaluator preserves
+      higher-priority live 49ers lighting.
+    mode: restart
+
+    triggers:
+
+      # Reconstruct window state after every Home Assistant restart.
+      - trigger: homeassistant
+        event: start
+        id: startup_reconcile
+
+      - trigger: sun
+        event: sunset
+        offset: "-02:00:00"
+        id: holiday_window_start
+
+      - trigger: sun
+        event: sunset
+        offset: "-00:15:00"
+        id: main_area_window
+
+      # One exact-sunset trigger owns every lighting area that
+      # begins at sunset. Using separate identical sun triggers with
+      # mode: restart creates a race in which one invocation can cancel
+      # another before all window helpers are established.
+      - trigger: sun
+        event: sunset
+        id: sunset_windows
+
+      - trigger: time
+        at: "01:59:00"
+        id: overnight_boundary
+
+    actions:
+
+      - choose:
+
+          - conditions:
+              - condition: trigger
+                id: startup_reconcile
+            sequence:
+
+              # Allow integrations/template entities to initialize.
+              - wait_template: >-
+                  {{ state_attr('sun.sun', 'next_setting') is not none }}
+                timeout: "00:00:30"
+                continue_on_timeout: false
+
+              - action: script.home_lighting_reconcile_windows
+
+              # Reconstruct Holiday ownership after restart.
+              # 00:00-01:58 belongs to the previous evening.
+              # After sunset-2h belongs to tonight.
+              # Otherwise Holiday ownership must be OFF.
+              - variables:
+                  clock: "{{ now().strftime('%H:%M:%S') }}"
+
+                  raw_setting: >-
+                    {{ state_attr('sun.sun', 'next_setting') }}
+
+                  next_setting_local: >-
+                    {{
+                      as_local(as_datetime(raw_setting))
+                      if raw_setting
+                      else none
+                    }}
+
+                  previous_evening_holiday: >-
+                    {{
+                      states(
+                        'sensor.home_holiday_calendar_previous_evening'
+                      )
+                    }}
+
+                  tonight_holiday: >-
+                    {{
+                      states(
+                        'sensor.home_holiday_calendar_tonight'
+                      )
+                    }}
+
+                  supported_previous: >-
+                    {{
+                      previous_evening_holiday in [
+                        'new_year',
+                        'valentines_day',
+                        'st_patricks_day',
+                        'july_4',
+                        'halloween',
+                        'thanksgiving',
+                        'christmas',
+                        'hanukkah'
+                      ]
+                    }}
+
+                  supported_tonight: >-
+                    {{
+                      tonight_holiday in [
+                        'new_year',
+                        'valentines_day',
+                        'st_patricks_day',
+                        'july_4',
+                        'halloween',
+                        'thanksgiving',
+                        'christmas',
+                        'hanukkah'
+                      ]
+                    }}
+
+                  after_holiday_start: >-
+                    {% set raw = state_attr('sun.sun', 'next_setting') %}
+                    {% set setting =
+                      as_local(as_datetime(raw))
+                      if raw
+                      else none
+                    %}
+
+                    {% if setting is none %}
+                      false
+                    {% elif setting.date() > now().date() %}
+                      true
+                    {% else %}
+                      {{
+                        now()
+                        >= setting - timedelta(hours=2)
+                      }}
+                    {% endif %}
+
+              - choose:
+
+                  # Midnight continuation of previous evening.
+                  - conditions:
+                      - condition: template
+                        value_template: >-
+                          {{
+                            clock < '01:59:00'
+                            and supported_previous | bool
+                          }}
+                    sequence:
+                      - action: input_text.set_value
+                        target:
+                          entity_id:
+                            input_text.home_lighting_holiday_key
+                        data:
+                          value: "{{ previous_evening_holiday }}"
+
+                      - action: input_boolean.turn_on
+                        target:
+                          entity_id:
+                            input_boolean.home_lighting_holiday_active
+
+                  # Current evening after sunset -2h.
+                  - conditions:
+                      - condition: template
+                        value_template: >-
+                          {{
+                            clock >= '01:59:00'
+                            and after_holiday_start | bool
+                            and supported_tonight | bool
+                          }}
+                    sequence:
+                      - action: input_text.set_value
+                        target:
+                          entity_id:
+                            input_text.home_lighting_holiday_key
+                        data:
+                          value: "{{ tonight_holiday }}"
+
+                      - action: input_boolean.turn_on
+                        target:
+                          entity_id:
+                            input_boolean.home_lighting_holiday_active
+
+                default:
+                  - action: input_boolean.turn_off
+                    target:
+                      entity_id:
+                        input_boolean.home_lighting_holiday_active
+
+                  - action: input_text.set_value
+                    target:
+                      entity_id:
+                        input_text.home_lighting_holiday_key
+                    data:
+                      value: ""
+
+              # Reapply authoritative owners after reconstructing
+              # all window + Holiday state.
+              - action: script.home_lighting_evaluate_and_apply
+
+              - action: script.home_lighting_apply_path_state
+
+              - action: script.home_lighting_evaluate_backyard
+
+          - conditions:
+              - condition: trigger
+                id: holiday_window_start
+            sequence:
+              - variables:
+                  tonight_holiday: >-
+                    {{ states('sensor.home_holiday_calendar_tonight') }}
+
+                  supported_holiday: >-
+                    {{
+                      tonight_holiday in [
+                        'new_year',
+                        'valentines_day',
+                        'st_patricks_day',
+                        'july_4',
+                        'halloween',
+                        'thanksgiving',
+                        'christmas',
+                        'hanukkah'
+                      ]
+                    }}
+
+              - if:
+                  - condition: template
+                    value_template: "{{ supported_holiday | bool }}"
+                then:
+                  - action: input_text.set_value
+                    target:
+                      entity_id: input_text.home_lighting_holiday_key
+                    data:
+                      value: "{{ tonight_holiday }}"
+
+                  - action: input_boolean.turn_on
+                    target:
+                      entity_id: input_boolean.home_lighting_holiday_active
+                else:
+                  - action: input_boolean.turn_off
+                    target:
+                      entity_id: input_boolean.home_lighting_holiday_active
+
+                  - action: input_text.set_value
+                    target:
+                      entity_id: input_text.home_lighting_holiday_key
+                    data:
+                      value: ""
+
+          - conditions:
+              - condition: trigger
+                id: main_area_window
+            sequence:
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.home_lighting_main_area_window
+
+          - conditions:
+              - condition: trigger
+                id: sunset_windows
+            sequence:
+              - action: input_boolean.turn_on
+                target:
+                  entity_id:
+                    - input_boolean.home_lighting_front_eve_window
+                    - input_boolean.home_lighting_pillar_window
+                    - input_boolean.home_lighting_path_window
+                    - input_boolean.home_lighting_backyard_window
+
+          - conditions:
+              - condition: trigger
+                id: overnight_boundary
+            sequence:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id:
+                    - input_boolean.home_lighting_main_area_window
+                    - input_boolean.home_lighting_front_eve_window
+                    - input_boolean.home_lighting_pillar_window
+                    - input_boolean.home_lighting_path_window
+                    - input_boolean.home_lighting_backyard_window
+                    - input_boolean.home_lighting_holiday_active
+
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.home_lighting_holiday_key
+                data:
+                  value: ""
+
+      - action: script.home_lighting_evaluate_and_apply
+
+      - if:
+          - condition: state
+            entity_id: input_boolean.home_lighting_pillar_window
+            state: "on"
+        then:
+          - action: script.home_lighting_apply_pillar_baseline
+        else:
+          - action: script.home_lighting_pillar_off
+
+
+      - action: script.home_lighting_apply_path_state
+
+      - action: script.home_lighting_evaluate_backyard
+
+
+# ============================================================
+# HOLIDAY CALENDAR
+# ============================================================
+#
+# Jewish Calendar integration is the authoritative source for
+# Hanukkah dates. This avoids hard-coded Gregorian dates and
+# automatically follows the Hebrew calendar each year.
+#
+# The holiday sensor can report:
+#   Chanukah
+#   Chanukah, Rosh Chodesh
+#
+# startswith("Chanukah") intentionally recognizes both.
+#
+# This sensor is informational only at this stage. It does NOT
+# control any lights until explicitly incorporated into the
+# Home Lighting ownership/evaluation logic.
+#
+template:
+  - binary_sensor:
+      - name: "Home Lighting Hanukkah Active"
+        unique_id: home_lighting_hanukkah_active
+        icon: mdi:menorah
+        state: >-
+          {{ states('sensor.jewish_calendar_holiday').startswith('Chanukah') }}
+        attributes:
+          jewish_calendar_holiday: >-
+            {{ states('sensor.jewish_calendar_holiday') }}
+          hebrew_date: >-
+            {{ states('sensor.jewish_calendar_date') }}

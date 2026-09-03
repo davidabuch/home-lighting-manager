@@ -1656,6 +1656,75 @@ automation:
 
               - action: script.home_lighting_reconcile_windows
 
+              # ------------------------------------------------------
+              # STARTUP MANUAL-OWNERSHIP SANITY CHECK
+              #
+              # A restored Manual helper must never remain ON when its
+              # corresponding physical Hue surface is OFF. That state
+              # can occur after testing or an interrupted/restarted HA
+              # session and would incorrectly suppress the next
+              # automatic lighting window.
+              #
+              # IMPORTANT:
+              # If the physical surface is ON, Manual ownership is
+              # preserved. Startup therefore never steals control from
+              # legitimate daytime/evening homeowner use.
+              # ------------------------------------------------------
+
+              - if:
+                  - condition: state
+                    entity_id: input_boolean.home_lighting_manual_main_area
+                    state: "on"
+                  - condition: state
+                    entity_id: light.holiday_main_area
+                    state: "off"
+                then:
+                  - action: input_boolean.turn_off
+                    target:
+                      entity_id: input_boolean.home_lighting_manual_main_area
+
+                  - action: input_text.set_value
+                    target:
+                      entity_id: input_text.home_lighting_manual_main_area_scene_id
+                    data:
+                      value: ""
+
+              - if:
+                  - condition: state
+                    entity_id: input_boolean.home_lighting_manual_front_eve
+                    state: "on"
+                  - condition: state
+                    entity_id: light.front_eve_zone
+                    state: "off"
+                then:
+                  - action: input_boolean.turn_off
+                    target:
+                      entity_id: input_boolean.home_lighting_manual_front_eve
+
+              - if:
+                  - condition: state
+                    entity_id: input_boolean.home_lighting_manual_path
+                    state: "on"
+                  - condition: state
+                    entity_id: light.holiday_path
+                    state: "off"
+                then:
+                  - action: input_boolean.turn_off
+                    target:
+                      entity_id: input_boolean.home_lighting_manual_path
+
+              - if:
+                  - condition: state
+                    entity_id: input_boolean.home_lighting_manual_backyard
+                    state: "on"
+                  - condition: state
+                    entity_id: light.holiday_backyard
+                    state: "off"
+                then:
+                  - action: input_boolean.turn_off
+                    target:
+                      entity_id: input_boolean.home_lighting_manual_backyard
+
               # Reconstruct Holiday ownership after restart.
               # 00:00-01:58 belongs to the previous evening.
               # After sunset-2h belongs to tonight.

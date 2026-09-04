@@ -3,7 +3,13 @@
   "name": "Home Hue Scene Monitor",
   "version": "0.1.0",
   "config_flow": true,
-  "dependencies": ["hue"],
-  "codeowners": [],
-  "iot_class": "local_polling"
+  "dependencies": [
+    "hue"
+  ],
+  "codeowners": [
+    "@davidabuch"
+  ],
+  "iot_class": "local_polling",
+  "documentation": "https://github.com/davidabuch/home-lighting-manager",
+  "issue_tracker": "https://github.com/davidabuch/home-lighting-manager/issues"
 }

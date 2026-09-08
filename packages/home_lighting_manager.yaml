@@ -142,6 +142,141 @@ input_number:
 
 script:
 
+  home_lighting_resolve_owners:
+    alias: Home Lighting - Resolve Current Owners
+    description: Read-only authority shared by existing evaluators and delayed verification. No lighting
+      commands.
+    mode: parallel
+    max: 30
+    variables:
+      main_area_baseline_eligible: '{{ is_state(''input_boolean.home_lighting_main_area_window'', ''on'')
+        }}'
+      front_eve_baseline_eligible: '{{ is_state(''input_boolean.home_lighting_front_eve_window'', ''on'')
+        }}'
+      living_room_sync_active: '{{ is_state(''binary_sensor.hue_bridge_living_room'', ''on'') }}'
+      manual_main_area_active: '{{ is_state(''input_boolean.home_lighting_manual_main_area'', ''on'')
+        }}'
+      manual_front_eve_active: '{{ is_state(''input_boolean.home_lighting_manual_front_eve'', ''on'')
+        }}'
+      liquor_cabinet_open: |-
+        {{
+          is_state('binary_sensor.liquor_cabinet_door_r', 'on')
+          or
+          is_state('binary_sensor.liquor_cabinet_l_door', 'on')
+        }}
+      game_live: '{{ is_state(''sensor.nfl_san_francisco_49ers'', ''IN'') }}'
+      holiday_active: '{{ is_state(''input_boolean.home_lighting_holiday_active'', ''on'') }}'
+      holiday_key: '{{ states(''input_text.home_lighting_holiday_key'') }}'
+      holiday_main_scene: |-
+        {% set scenes = {
+          'new_year': 'scene.holiday_main_area_golden_star',
+          'valentines_day': 'scene.holiday_main_area_valentines_day',
+          'st_patricks_day': 'scene.holiday_main_area_st_patricks_day',
+          'july_4': 'scene.holiday_main_area_4th_of_july',
+          'halloween': 'scene.holiday_main_area_trick_or_treat',
+          'thanksgiving': 'scene.holiday_main_area_pumpkin_spice',
+          'christmas': 'scene.holiday_main_area_jolly',
+          'hanukkah': 'scene.holiday_main_area_hanukkah'
+        } %} {{ scenes.get(holiday_key, '') }}
+      holiday_eve_scene: |-
+        {% set scenes = {
+          'new_year': 'scene.holiday_front_eve_zone_golden_star',
+          'valentines_day': 'scene.holiday_front_eve_zone_valentines_day',
+          'st_patricks_day': 'scene.holiday_front_eve_zone_st_patricks_day',
+          'july_4': 'scene.front_eve_zone_4th_of_july',
+          'halloween': 'scene.holiday_front_eve_zone_trick_or_treat',
+          'thanksgiving': 'scene.holiday_front_eve_zone_pumpkin_spice',
+          'christmas': 'scene.front_eve_zone_jolly',
+          'hanukkah': 'scene.front_eve_zone_hanukkah'
+        } %} {{ scenes.get(holiday_key, '') }}
+      holiday_path_scene: |-
+        {% set scenes = {
+          'new_year': 'scene.holiday_path_golden_star',
+          'valentines_day': 'scene.holiday_path_valentines_day',
+          'st_patricks_day': 'scene.holiday_path_st_patricks_day',
+          'july_4': 'scene.holiday_path_4th_of_july',
+          'halloween': 'scene.holiday_path_trick_or_treat',
+          'thanksgiving': 'scene.holiday_path_pumpkin_spice',
+          'christmas': 'scene.holiday_path_jolly',
+          'hanukkah': 'scene.holiday_path_hanukkah'
+        } %} {{ scenes.get(holiday_key, '') }}
+      holiday_backyard_scene: |-
+        {% set scenes = {
+          'new_year': 'scene.holiday_backyard_golden_star',
+          'valentines_day': 'scene.holiday_backyard_valentines_day',
+          'st_patricks_day': 'scene.holiday_backyard_st_patricks_day',
+          'july_4': 'scene.holiday_backyard_4th_of_july',
+          'halloween': 'scene.holiday_backyard_trick_or_treat',
+          'thanksgiving': 'scene.holiday_backyard_pumpkin_spice',
+          'christmas': 'scene.holiday_backyard_jolly',
+          'hanukkah': 'scene.holiday_backyard_hanukkah'
+        } %} {{ scenes.get(holiday_key, '') }}
+      owner_main_area: >-
+        {{ 'sync' if living_room_sync_active else 'manual' if manual_main_area_active else '49ers'
+        if game_live else 'holiday' if holiday_active and holiday_main_scene else 'daily' if main_area_baseline_eligible
+        else 'off' }}
+      owner_front_eve: >-
+        {{ 'manual' if manual_front_eve_active else '49ers' if game_live else 'holiday' if holiday_active
+        and holiday_eve_scene else 'daily' if front_eve_baseline_eligible else 'off' }}
+      owner_path: >-
+        {{ 'manual' if is_state('input_boolean.home_lighting_manual_path', 'on') else 'holiday' if
+        holiday_active and holiday_path_scene else 'daily' if is_state('input_boolean.home_lighting_path_window',
+        'on') else 'off' }}
+      owner_backyard: >-
+        {{ 'sync' if is_state('binary_sensor.hue_bridge_backyard', 'on') else 'manual' if is_state('input_boolean.home_lighting_manual_backyard',
+        'on') else 'spa' if is_state('input_boolean.spa_gauge_active', 'on') else 'holiday' if holiday_active
+        and holiday_backyard_scene else 'daily' if is_state('input_boolean.home_lighting_backyard_window',
+        'on') else 'off' }}
+      owners:
+        main_area:
+          owner: '{{ owner_main_area }}'
+          scene: '{{ ''scene.holiday_main_area_49ers'' if owner_main_area == ''49ers'' else holiday_main_scene
+            }}'
+        front_eve:
+          owner: '{{ owner_front_eve }}'
+          scene: '{{ ''scene.front_eve_zone_49ers'' if owner_front_eve == ''49ers'' else holiday_eve_scene
+            }}'
+        path:
+          owner: '{{ owner_path }}'
+          scene: '{{ holiday_path_scene }}'
+        backyard:
+          owner: '{{ owner_backyard }}'
+          scene: '{{ holiday_backyard_scene }}'
+        liquor_cabinet:
+          owner: '{{ ''sync'' if living_room_sync_active else ''door'' if liquor_cabinet_open else
+            owner_main_area }}'
+        pillars:
+          owner: '{{ ''daily'' if is_state(''input_boolean.home_lighting_pillar_window'', ''on'') else
+            ''off'' }}'
+    sequence:
+    - stop: Current owners resolved
+      response_variable: owners
+
+  home_lighting_liquor_white:
+    alias: Home Lighting - Liquor White Overlay
+    mode: restart
+    sequence:
+    - if:
+      - condition: state
+        entity_id: binary_sensor.hue_bridge_living_room
+        state: 'off'
+      - condition: or
+        conditions:
+        - condition: state
+          entity_id: binary_sensor.liquor_cabinet_door_r
+          state: 'on'
+        - condition: state
+          entity_id: binary_sensor.liquor_cabinet_l_door
+          state: 'on'
+      then:
+      - action: light.turn_on
+        target:
+          entity_id: light.living_room_liquor_cabinet_light
+        data:
+          brightness: 255
+          color_temp_kelvin: 4000
+          transition: 0
+
   # ============================================================
   # FRONT EVE BASELINE
   # ============================================================
@@ -289,45 +424,27 @@ script:
   # ============================================================
 
   home_lighting_main_area_off:
-    alias: "Home Lighting - Main Area Off"
-    description: >
-      Turns off the Hue Main Area as one grouped-light command for
-      synchronized and reliable shutdown. If a liquor-cabinet door is
-      open, the functional bright-white cabinet override is immediately
-      reasserted after the group turns off.
+    alias: Home Lighting - Main Area Off
+    description: |
+      Turns off the Hue Main Area as one grouped-light command for synchronized and reliable shutdown. If a liquor-cabinet door is open, the functional bright-white cabinet override is immediately reasserted after the group turns off.
     mode: restart
-
     sequence:
-
-      # Use the native Hue grouped-light entity instead of commanding
-      # individual members one-by-one. This produces a single bridge-side
-      # group command and avoids occasional partial shutdowns.
-      - action: light.turn_off
-        target:
-          entity_id: light.holiday_main_area
-        data:
-          transition: 0
-
-      # The liquor cabinet remains a functional exception while a door
-      # is open. Reassert it after the grouped Main Area OFF command.
-      - if:
-          - condition: or
-            conditions:
-              - condition: state
-                entity_id: binary_sensor.liquor_cabinet_door_r
-                state: "on"
-              - condition: state
-                entity_id: binary_sensor.liquor_cabinet_l_door
-                state: "on"
-        then:
-          - action: light.turn_on
-            target:
-              entity_id: light.living_room_liquor_cabinet_light
-            data:
-              brightness: 255
-              color_temp_kelvin: 4000
-              transition: 0
-
+    - action: light.turn_off
+      target:
+        entity_id: light.holiday_main_area
+      data:
+        transition: 0
+    - if:
+      - condition: or
+        conditions:
+        - condition: state
+          entity_id: binary_sensor.liquor_cabinet_door_r
+          state: 'on'
+        - condition: state
+          entity_id: binary_sensor.liquor_cabinet_l_door
+          state: 'on'
+      then:
+      - action: script.home_lighting_liquor_white
 
   # ============================================================
   # HA COMMAND GUARD RE-ARM
@@ -438,67 +555,36 @@ script:
   # ============================================================
 
   home_lighting_apply_path_state:
-    alias: "Home Lighting - Apply Driveway Path State"
-    description: >
-      Applies the authoritative Driveway Path owner. Automatic Manual
-      ownership suppresses HA daily/off commands until the homeowner
-      relinquishes control by turning the surface off.
+    alias: Home Lighting - Apply Driveway Path State
+    description: |
+      Applies the authoritative Driveway Path owner. Automatic Manual ownership suppresses HA daily/off commands until the homeowner relinquishes control by turning the surface off.
     mode: restart
-
-    variables:
-      holiday_key: >-
-        {{ states('input_text.home_lighting_holiday_key') }}
-
-      holiday_scene: >-
-        {% set scenes = {
-          'new_year': 'scene.holiday_path_golden_star',
-          'valentines_day': 'scene.holiday_path_valentines_day',
-          'st_patricks_day': 'scene.holiday_path_st_patricks_day',
-          'july_4': 'scene.holiday_path_4th_of_july',
-          'halloween': 'scene.holiday_path_trick_or_treat',
-          'thanksgiving': 'scene.holiday_path_pumpkin_spice',
-          'christmas': 'scene.holiday_path_jolly',
-          'hanukkah': 'scene.holiday_path_hanukkah'
-        } %}
-        {{ scenes.get(holiday_key, '') }}
-
     sequence:
-
-      # Manual homeowner ownership is authoritative.
-      - if:
-          - condition: state
-            entity_id: input_boolean.home_lighting_manual_path
-            state: "on"
-        then:
-          - stop: "Homeowner Manual owns Holiday Path."
-
-      # Any command below is HA-owned.
-      - action: script.home_lighting_rearm_ha_guard
-        data:
-          guard_entity: input_boolean.home_lighting_ha_guard_path
-
-      - choose:
-          - conditions:
-              - condition: state
-                entity_id: input_boolean.home_lighting_holiday_active
-                state: "on"
-              - condition: template
-                value_template: "{{ holiday_scene | length > 0 }}"
-            sequence:
-              - action: scene.turn_on
-                target:
-                  entity_id: "{{ holiday_scene }}"
-
-        default:
-          - if:
-              - condition: state
-                entity_id: input_boolean.home_lighting_path_window
-                state: "on"
-            then:
-              - action: script.home_lighting_apply_path_baseline
-            else:
-              - action: script.home_lighting_path_off
-
+    - action: script.home_lighting_resolve_owners
+      response_variable: current
+    - if:
+      - condition: template
+        value_template: '{{ current.path.owner == ''manual'' }}'
+      then:
+      - stop: Homeowner Manual owns Holiday Path.
+    - action: script.home_lighting_rearm_ha_guard
+      data:
+        guard_entity: input_boolean.home_lighting_ha_guard_path
+    - choose:
+      - conditions:
+        - condition: template
+          value_template: '{{ current.path.owner == ''holiday'' }}'
+        sequence:
+        - action: scene.turn_on
+          target:
+            entity_id: '{{ current.path.scene }}'
+      - conditions:
+        - condition: template
+          value_template: '{{ current.path.owner == ''daily'' }}'
+        sequence:
+        - action: script.home_lighting_apply_path_baseline
+      default:
+      - action: script.home_lighting_path_off
 
   # ============================================================
   # BACKYARD DAILY BASELINE
@@ -559,91 +645,36 @@ script:
   # ============================================================
 
   home_lighting_evaluate_backyard:
-    alias: "Home Lighting - Evaluate Backyard"
-    description: >
-      Applies authoritative Backyard ownership:
-      Hue Sync > Homeowner Manual > Spa Gauge > Holiday > Daily > Off.
+    alias: Home Lighting - Evaluate Backyard
+    description: |
+      Applies authoritative Backyard ownership: Hue Sync > Homeowner Manual > Spa Gauge > Holiday > Daily > Off.
     mode: restart
-
     sequence:
-      - choose:
-
-          # ======================================================
-          # PRIORITY 1: HUE BACKYARD SYNC
-          # ======================================================
-          - conditions:
-              - condition: state
-                entity_id: binary_sensor.hue_bridge_backyard
-                state: "on"
-            sequence:
-              - stop: "Hue Backyard Sync owns Backyard."
-
-          # ======================================================
-          # PRIORITY 2: HOMEOWNER MANUAL
-          # ======================================================
-          - conditions:
-              - condition: state
-                entity_id: input_boolean.home_lighting_manual_backyard
-                state: "on"
-            sequence:
-              - stop: "Homeowner Manual owns Backyard."
-
-          # ======================================================
-          # PRIORITY 3: SPA GAUGE
-          # ======================================================
-          - conditions:
-              - condition: state
-                entity_id: input_boolean.spa_gauge_active
-                state: "on"
-            sequence:
-              - stop: "Spa Gauge owns Backyard."
-
-        default:
-
-          # Any command below is HA-owned.
-          - action: script.home_lighting_rearm_ha_guard
-            data:
-              guard_entity: input_boolean.home_lighting_ha_guard_backyard
-
-          - variables:
-              holiday_key: >-
-                {{ states('input_text.home_lighting_holiday_key') }}
-
-              holiday_scene: >-
-                {% set scenes = {
-                  'new_year': 'scene.holiday_backyard_golden_star',
-                  'valentines_day': 'scene.holiday_backyard_valentines_day',
-                  'st_patricks_day': 'scene.holiday_backyard_st_patricks_day',
-                  'july_4': 'scene.holiday_backyard_4th_of_july',
-                  'halloween': 'scene.holiday_backyard_trick_or_treat',
-                  'thanksgiving': 'scene.holiday_backyard_pumpkin_spice',
-                  'christmas': 'scene.holiday_backyard_jolly',
-                  'hanukkah': 'scene.holiday_backyard_hanukkah'
-                } %}
-                {{ scenes.get(holiday_key, '') }}
-
-          - choose:
-              - conditions:
-                  - condition: state
-                    entity_id: input_boolean.home_lighting_holiday_active
-                    state: "on"
-                  - condition: template
-                    value_template: "{{ holiday_scene | length > 0 }}"
-                sequence:
-                  - action: scene.turn_on
-                    target:
-                      entity_id: "{{ holiday_scene }}"
-
-            default:
-              - if:
-                  - condition: state
-                    entity_id: input_boolean.home_lighting_backyard_window
-                    state: "on"
-                then:
-                  - action: script.home_lighting_apply_backyard_baseline
-                else:
-                  - action: script.home_lighting_backyard_off
-
+    - action: script.home_lighting_resolve_owners
+      response_variable: current
+    - if:
+      - condition: template
+        value_template: '{{ current.backyard.owner in [''sync'', ''manual'', ''spa''] }}'
+      then:
+      - stop: Higher-priority owner controls Backyard.
+    - action: script.home_lighting_rearm_ha_guard
+      data:
+        guard_entity: input_boolean.home_lighting_ha_guard_backyard
+    - choose:
+      - conditions:
+        - condition: template
+          value_template: '{{ current.backyard.owner == ''holiday'' }}'
+        sequence:
+        - action: scene.turn_on
+          target:
+            entity_id: '{{ current.backyard.scene }}'
+      - conditions:
+        - condition: template
+          value_template: '{{ current.backyard.owner == ''daily'' }}'
+        sequence:
+        - action: script.home_lighting_apply_backyard_baseline
+      default:
+      - action: script.home_lighting_backyard_off
 
   # ============================================================
   # COMBINED DAILY BASELINE
@@ -696,202 +727,83 @@ script:
   # ============================================================
 
   home_lighting_evaluate_and_apply:
-    alias: "Home Lighting - Evaluate and Apply"
-    description: >
-      Evaluates Main Area and Front Eve independently. Living Room Hue
-      Sync owns Main Area while active. Outside Sync, automatic Homeowner
-      Manual ownership supersedes 49ers, daily, and off. An open liquor
-      cabinet remains a functional bright-white overlay outside Sync.
+    alias: Home Lighting - Evaluate and Apply
+    description: |
+      Evaluates Main Area and Front Eve independently. Living Room Hue Sync owns Main Area while active. Outside Sync, automatic Homeowner Manual ownership supersedes 49ers, daily, and off. An open liquor cabinet remains a functional bright-white overlay outside Sync.
     mode: restart
-
-    variables:
-
-      main_area_baseline_eligible: >-
-        {{ is_state('input_boolean.home_lighting_main_area_window', 'on') }}
-
-      front_eve_baseline_eligible: >-
-        {{ is_state('input_boolean.home_lighting_front_eve_window', 'on') }}
-
-      living_room_sync_active: >-
-        {{ is_state('binary_sensor.hue_bridge_living_room', 'on') }}
-
-      manual_main_area_active: >-
-        {{ is_state('input_boolean.home_lighting_manual_main_area', 'on') }}
-
-      manual_front_eve_active: >-
-        {{ is_state('input_boolean.home_lighting_manual_front_eve', 'on') }}
-
-      liquor_cabinet_open: >-
-        {{
-          is_state('binary_sensor.liquor_cabinet_door_r', 'on')
-          or
-          is_state('binary_sensor.liquor_cabinet_l_door', 'on')
-        }}
-
-      game_live: >-
-        {{ is_state('sensor.nfl_san_francisco_49ers', 'IN') }}
-
-      holiday_active: >-
-        {{ is_state('input_boolean.home_lighting_holiday_active', 'on') }}
-
-      holiday_key: >-
-        {{ states('input_text.home_lighting_holiday_key') }}
-
-      holiday_main_scene: >-
-        {% set scenes = {
-          'new_year': 'scene.holiday_main_area_golden_star',
-          'valentines_day': 'scene.holiday_main_area_valentines_day',
-          'st_patricks_day': 'scene.holiday_main_area_st_patricks_day',
-          'july_4': 'scene.holiday_main_area_4th_of_july',
-          'halloween': 'scene.holiday_main_area_trick_or_treat',
-          'thanksgiving': 'scene.holiday_main_area_pumpkin_spice',
-          'christmas': 'scene.holiday_main_area_jolly',
-          'hanukkah': 'scene.holiday_main_area_hanukkah'
-        } %}
-        {{ scenes.get(holiday_key, '') }}
-
-      holiday_eve_scene: >-
-        {% set scenes = {
-          'new_year': 'scene.holiday_front_eve_zone_golden_star',
-          'valentines_day': 'scene.holiday_front_eve_zone_valentines_day',
-          'st_patricks_day': 'scene.holiday_front_eve_zone_st_patricks_day',
-          'july_4': 'scene.front_eve_zone_4th_of_july',
-          'halloween': 'scene.holiday_front_eve_zone_trick_or_treat',
-          'thanksgiving': 'scene.holiday_front_eve_zone_pumpkin_spice',
-          'christmas': 'scene.front_eve_zone_jolly',
-          'hanukkah': 'scene.front_eve_zone_hanukkah'
-        } %}
-        {{ scenes.get(holiday_key, '') }}
-
     sequence:
-
-      # ==========================================================
-      # FRONT EVE OWNER
-      #
-      # Manual > 49ers > Daily > Off
-      # ==========================================================
-
-      - if:
+    - action: script.home_lighting_resolve_owners
+      response_variable: current
+    - if:
+      - condition: template
+        value_template: '{{ current.front_eve.owner not in [''sync'', ''manual''] }}'
+      then:
+      - action: script.home_lighting_rearm_ha_guard
+        data:
+          guard_entity: input_boolean.home_lighting_ha_guard_front_eve
+      - choose:
+        - conditions:
           - condition: template
-            value_template: "{{ not (manual_front_eve_active | bool) }}"
-        then:
-
-          - action: script.home_lighting_rearm_ha_guard
-            data:
-              guard_entity: input_boolean.home_lighting_ha_guard_front_eve
-
-          - choose:
-
-              - conditions:
-                  - condition: template
-                    value_template: "{{ game_live | bool }}"
-                sequence:
-                  - action: scene.turn_on
-                    target:
-                      entity_id: scene.front_eve_zone_49ers
-
-              - conditions:
-                  - condition: template
-                    value_template: >-
-                      {{
-                        holiday_active | bool
-                        and holiday_eve_scene | length > 0
-                      }}
-                sequence:
-                  - action: scene.turn_on
-                    target:
-                      entity_id: "{{ holiday_eve_scene }}"
-
-            default:
-
-              - if:
-                  - condition: template
-                    value_template: "{{ front_eve_baseline_eligible | bool }}"
-                then:
-                  - action: script.home_lighting_apply_front_eve_baseline
-                else:
-                  - action: script.home_lighting_front_eve_off
-
-
-      # ==========================================================
-      # MAIN AREA OWNER
-      #
-      # Hue Sync > Manual > 49ers > Daily > Off
-      # ==========================================================
-
-      - if:
-          - condition: template
-            value_template: >-
-              {{
-                not (living_room_sync_active | bool)
-                and not (manual_main_area_active | bool)
-              }}
-        then:
-
-          - action: script.home_lighting_rearm_ha_guard
-            data:
-              guard_entity: input_boolean.home_lighting_ha_guard_main_area
-
-          - choose:
-
-              - conditions:
-                  - condition: template
-                    value_template: "{{ game_live | bool }}"
-                sequence:
-                  - action: scene.turn_on
-                    target:
-                      entity_id: scene.holiday_main_area_49ers
-
-              - conditions:
-                  - condition: template
-                    value_template: >-
-                      {{
-                        holiday_active | bool
-                        and holiday_main_scene | length > 0
-                      }}
-                sequence:
-                  - action: scene.turn_on
-                    target:
-                      entity_id: "{{ holiday_main_scene }}"
-
-            default:
-
-              - if:
-                  - condition: template
-                    value_template: "{{ main_area_baseline_eligible | bool }}"
-                then:
-                  - action: script.home_lighting_apply_main_area_baseline
-                else:
-                  - action: script.home_lighting_main_area_off
-
-
-      # ==========================================================
-      # LIQUOR CABINET FUNCTIONAL OVERRIDE
-      #
-      # Living Room Sync is the sole exception.
-      # ==========================================================
-
-      - if:
-          - condition: template
-            value_template: >-
-              {{
-                liquor_cabinet_open | bool
-                and not (living_room_sync_active | bool)
-              }}
-        then:
-
-          - action: script.home_lighting_rearm_ha_guard
-            data:
-              guard_entity: input_boolean.home_lighting_ha_guard_main_area
-
-          - action: light.turn_on
+            value_template: '{{ current.front_eve.owner == ''49ers'' }}'
+          sequence:
+          - action: scene.turn_on
             target:
-              entity_id: light.living_room_liquor_cabinet_light
-            data:
-              brightness: 255
-              color_temp_kelvin: 4000
-              transition: 0
-
+              entity_id: '{{ current.front_eve.scene }}'
+        - conditions:
+          - condition: template
+            value_template: '{{ current.front_eve.owner == ''holiday'' }}'
+          sequence:
+          - action: scene.turn_on
+            target:
+              entity_id: '{{ current.front_eve.scene }}'
+        - conditions:
+          - condition: template
+            value_template: '{{ current.front_eve.owner == ''daily'' }}'
+          sequence:
+          - action: script.home_lighting_apply_front_eve_baseline
+        default:
+        - action: script.home_lighting_front_eve_off
+    - action: script.home_lighting_resolve_owners
+      response_variable: current
+    - if:
+      - condition: template
+        value_template: '{{ current.main_area.owner not in [''sync'', ''manual''] }}'
+      then:
+      - action: script.home_lighting_rearm_ha_guard
+        data:
+          guard_entity: input_boolean.home_lighting_ha_guard_main_area
+      - choose:
+        - conditions:
+          - condition: template
+            value_template: '{{ current.main_area.owner == ''49ers'' }}'
+          sequence:
+          - action: scene.turn_on
+            target:
+              entity_id: '{{ current.main_area.scene }}'
+        - conditions:
+          - condition: template
+            value_template: '{{ current.main_area.owner == ''holiday'' }}'
+          sequence:
+          - action: scene.turn_on
+            target:
+              entity_id: '{{ current.main_area.scene }}'
+        - conditions:
+          - condition: template
+            value_template: '{{ current.main_area.owner == ''daily'' }}'
+          sequence:
+          - action: script.home_lighting_apply_main_area_baseline
+        default:
+        - action: script.home_lighting_main_area_off
+    - action: script.home_lighting_resolve_owners
+      response_variable: current
+    - if:
+      - condition: template
+        value_template: '{{ current.liquor_cabinet.owner == ''door'' }}'
+      then:
+      - action: script.home_lighting_rearm_ha_guard
+        data:
+          guard_entity: input_boolean.home_lighting_ha_guard_main_area
+      - action: script.home_lighting_liquor_white
 
   # ============================================================
   # WINDOW RECONCILIATION
@@ -1182,7 +1094,7 @@ automation:
                         entity_id: input_boolean.spa_gauge_active
                         state: "on"
                       - condition: state
-                        entity_id: climate.buch_family_spa_thermostat
+                        entity_id: climate.poolos_native_intellicenter_hot_tub_thermostat
                         state: "heat"
                     sequence:
                       - action: automation.trigger
@@ -1343,18 +1255,26 @@ automation:
 
       - trigger: state
         entity_id: sensor.main_area_last_recall
+        # A recall changes the timestamp; active/count metadata alone is not intent.
+        to: null
         id: main_scene_recall
 
       - trigger: state
         entity_id: sensor.front_eve_last_recall
+        # A recall changes the timestamp; active/count metadata alone is not intent.
+        to: null
         id: front_eve_scene_recall
 
       - trigger: state
         entity_id: sensor.path_last_recall
+        # A recall changes the timestamp; active/count metadata alone is not intent.
+        to: null
         id: path_scene_recall
 
       - trigger: state
         entity_id: sensor.backyard_last_recall
+        # A recall changes the timestamp; active/count metadata alone is not intent.
+        to: null
         id: backyard_scene_recall
 
     conditions: []
@@ -2023,3 +1943,6 @@ template:
             {{ states('sensor.jewish_calendar_holiday') }}
           hebrew_date: >-
             {{ states('sensor.jewish_calendar_date') }}
+
+# Central delayed health verification; no new independent schedule triggers.
+home_lighting_reconciliation: {}

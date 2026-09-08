@@ -1,8 +1,8 @@
+# Queued door events cannot interrupt snapshot capture. Capture once until both doors close.
 - id: '1784224203901'
   alias: Liquor Cabinet Display Lighting
-  description: 'Outside Living Room Hue Sync, brightens the liquor cabinet light immediately to full 4000K white whenever either cabinet door is open. When both doors close, releases the override to the central Home Lighting evaluator so 49ers, future holiday, daily baseline, or off is restored. During Hue Sync, door activity intentionally does not alter the Entertainment stream.
-
-    '
+  description: |
+    Outside Living Room Hue Sync, brightens the liquor cabinet light immediately to full 4000K white whenever either cabinet door is open. When both doors close, releases the override to the central Home Lighting evaluator so 49ers, future holiday, daily baseline, or off is restored. During Hue Sync, door activity intentionally does not alter the Entertainment stream.
   triggers:
   - trigger: state
     entity_id: binary_sensor.liquor_cabinet_door_r
@@ -40,14 +40,28 @@
         - condition: state
           entity_id: input_boolean.home_lighting_manual_main_area
           state: 'on'
+        - condition: state
+          entity_id: input_boolean.home_lighting_liquor_snapshot_valid
+          state: 'off'
         then:
+        - variables:
+            snapshot_on: '{{ is_state(''light.living_room_liquor_cabinet_light'', ''on'') }}'
+            snapshot_color_mode: '{{ state_attr(''light.living_room_liquor_cabinet_light'', ''color_mode'')
+              or ''unknown'' }}'
+            snapshot_brightness: '{{ state_attr(''light.living_room_liquor_cabinet_light'', ''brightness'')
+              | int(0) }}'
+            snapshot_color_temp_kelvin: '{{ state_attr(''light.living_room_liquor_cabinet_light'',
+              ''color_temp_kelvin'') | int(2700) }}'
+            snapshot_x: '{{ (state_attr(''light.living_room_liquor_cabinet_light'', ''xy_color'')
+              or [0.3127, 0.3290])[0] }}'
+            snapshot_y: '{{ (state_attr(''light.living_room_liquor_cabinet_light'', ''xy_color'')
+              or [0.3127, 0.3290])[1] }}'
         - action: input_boolean.turn_off
           target:
             entity_id: input_boolean.home_lighting_liquor_snapshot_valid
         - if:
-          - condition: state
-            entity_id: light.living_room_liquor_cabinet_light
-            state: 'on'
+          - condition: template
+            value_template: '{{ snapshot_on }}'
           then:
           - action: input_boolean.turn_on
             target:
@@ -60,40 +74,34 @@
           target:
             entity_id: input_text.home_lighting_liquor_snapshot_color_mode
           data:
-            value: "{{\n  state_attr(\n    'light.living_room_liquor_cabinet_light',\n    'color_mode'\n  ) or 'unknown'\n}}"
+            value: '{{ snapshot_color_mode }}'
         - action: input_number.set_value
           target:
             entity_id: input_number.home_lighting_liquor_snapshot_brightness
           data:
-            value: "{{\n  state_attr(\n    'light.living_room_liquor_cabinet_light',\n    'brightness'\n  ) | int(0)\n}}"
+            value: '{{ snapshot_brightness }}'
         - action: input_number.set_value
           target:
             entity_id: input_number.home_lighting_liquor_snapshot_color_temp_kelvin
           data:
-            value: "{{\n  state_attr(\n    'light.living_room_liquor_cabinet_light',\n    'color_temp_kelvin'\n  ) | int(2700)\n}}"
+            value: '{{ snapshot_color_temp_kelvin }}'
         - action: input_number.set_value
           target:
             entity_id: input_number.home_lighting_liquor_snapshot_x
           data:
-            value: "{{\n  (\n    state_attr(\n      'light.living_room_liquor_cabinet_light',\n      'xy_color'\n    ) or [0.3127, 0.3290]\n  )[0] | float\n}}"
+            value: '{{ snapshot_x }}'
         - action: input_number.set_value
           target:
             entity_id: input_number.home_lighting_liquor_snapshot_y
           data:
-            value: "{{\n  (\n    state_attr(\n      'light.living_room_liquor_cabinet_light',\n      'xy_color'\n    ) or [0.3127, 0.3290]\n  )[1] | float\n}}"
+            value: '{{ snapshot_y }}'
         - action: input_boolean.turn_on
           target:
             entity_id: input_boolean.home_lighting_liquor_snapshot_valid
       - action: script.home_lighting_rearm_ha_guard
         data:
           guard_entity: input_boolean.home_lighting_ha_guard_main_area
-      - action: light.turn_on
-        target:
-          entity_id: light.living_room_liquor_cabinet_light
-        data:
-          brightness: 255
-          color_temp_kelvin: 4000
-          transition: 0
+      - action: script.home_lighting_liquor_white
     - conditions:
       - condition: trigger
         id:
@@ -124,10 +132,53 @@
           - choose:
             - conditions:
               - condition: template
-                value_template: "{{\n  states(\n    'input_text.home_lighting_manual_main_area_scene_id'\n  )\n  in [\n    '5228223d-532f-4bef-b266-0ceceb780819',\n    '2239f47c-cd38-406e-8a8f-dbfd2f44427b',\n    '7bd5c0b2-abf2-494e-abff-9959f898b6cb',\n    '5ba345e1-8c87-4e4b-98c4-871eb8934c57',\n    'fa00e53a-e2cd-4870-a0a1-0ab79ff47ef2',\n    '54c61256-1909-4645-b53d-ec8a5dd1947c',\n    '11e92f0d-4d2b-44ca-9d51-eaf503f7da52',\n    'c4d1f89c-4b2a-472b-b95a-dc29abcea677',\n    'b0d7302e-c694-4ab4-b8b3-e38f4ad8ae4b'\n  ]\n}}"
+                value_template: |-
+                  {{
+                    states(
+                      'input_text.home_lighting_manual_main_area_scene_id'
+                    )
+                    in [
+                      '5228223d-532f-4bef-b266-0ceceb780819',
+                      '2239f47c-cd38-406e-8a8f-dbfd2f44427b',
+                      '7bd5c0b2-abf2-494e-abff-9959f898b6cb',
+                      '5ba345e1-8c87-4e4b-98c4-871eb8934c57',
+                      'fa00e53a-e2cd-4870-a0a1-0ab79ff47ef2',
+                      '54c61256-1909-4645-b53d-ec8a5dd1947c',
+                      '11e92f0d-4d2b-44ca-9d51-eaf503f7da52',
+                      'c4d1f89c-4b2a-472b-b95a-dc29abcea677',
+                      'b0d7302e-c694-4ab4-b8b3-e38f4ad8ae4b'
+                    ]
+                  }}
               sequence:
               - variables:
-                  restore_scene: "{% set scenes = {\n  '5228223d-532f-4bef-b266-0ceceb780819':\n    'scene.holiday_main_area_49ers',\n  '2239f47c-cd38-406e-8a8f-dbfd2f44427b':\n    'scene.holiday_main_area_4th_of_july',\n  '7bd5c0b2-abf2-494e-abff-9959f898b6cb':\n    'scene.holiday_main_area_golden_star',\n  '5ba345e1-8c87-4e4b-98c4-871eb8934c57':\n    'scene.holiday_main_area_hanukkah',\n  'fa00e53a-e2cd-4870-a0a1-0ab79ff47ef2':\n    'scene.holiday_main_area_jolly',\n  '54c61256-1909-4645-b53d-ec8a5dd1947c':\n    'scene.holiday_main_area_pumpkin_spice',\n  '11e92f0d-4d2b-44ca-9d51-eaf503f7da52':\n    'scene.holiday_main_area_st_patricks_day',\n  'c4d1f89c-4b2a-472b-b95a-dc29abcea677':\n    'scene.holiday_main_area_trick_or_treat',\n  'b0d7302e-c694-4ab4-b8b3-e38f4ad8ae4b':\n    'scene.holiday_main_area_valentines_day'\n} %} {{\n  scenes.get(\n    states(\n      'input_text.home_lighting_manual_main_area_scene_id'\n    ),\n    ''\n  )\n}}"
+                  restore_scene: |-
+                    {% set scenes = {
+                      '5228223d-532f-4bef-b266-0ceceb780819':
+                        'scene.holiday_main_area_49ers',
+                      '2239f47c-cd38-406e-8a8f-dbfd2f44427b':
+                        'scene.holiday_main_area_4th_of_july',
+                      '7bd5c0b2-abf2-494e-abff-9959f898b6cb':
+                        'scene.holiday_main_area_golden_star',
+                      '5ba345e1-8c87-4e4b-98c4-871eb8934c57':
+                        'scene.holiday_main_area_hanukkah',
+                      'fa00e53a-e2cd-4870-a0a1-0ab79ff47ef2':
+                        'scene.holiday_main_area_jolly',
+                      '54c61256-1909-4645-b53d-ec8a5dd1947c':
+                        'scene.holiday_main_area_pumpkin_spice',
+                      '11e92f0d-4d2b-44ca-9d51-eaf503f7da52':
+                        'scene.holiday_main_area_st_patricks_day',
+                      'c4d1f89c-4b2a-472b-b95a-dc29abcea677':
+                        'scene.holiday_main_area_trick_or_treat',
+                      'b0d7302e-c694-4ab4-b8b3-e38f4ad8ae4b':
+                        'scene.holiday_main_area_valentines_day'
+                    } %} {{
+                      scenes.get(
+                        states(
+                          'input_text.home_lighting_manual_main_area_scene_id'
+                        ),
+                        ''
+                      )
+                    }}
               - action: scene.turn_on
                 target:
                   entity_id: '{{ restore_scene }}'
@@ -150,10 +201,25 @@
                 target:
                   entity_id: light.living_room_liquor_cabinet_light
                 data:
-                  brightness: "{{\n  states(\n    'input_number.home_lighting_liquor_snapshot_brightness'\n  ) | int\n}}"
+                  brightness: |-
+                    {{
+                      states(
+                        'input_number.home_lighting_liquor_snapshot_brightness'
+                      ) | int
+                    }}
                   xy_color:
-                  - "{{\n  states(\n    'input_number.home_lighting_liquor_snapshot_x'\n  ) | float\n}}"
-                  - "{{\n  states(\n    'input_number.home_lighting_liquor_snapshot_y'\n  ) | float\n}}"
+                  - |-
+                    {{
+                      states(
+                        'input_number.home_lighting_liquor_snapshot_x'
+                      ) | float
+                    }}
+                  - |-
+                    {{
+                      states(
+                        'input_number.home_lighting_liquor_snapshot_y'
+                      ) | float
+                    }}
                   transition: 1
             - conditions:
               - condition: state
@@ -164,19 +230,38 @@
                 target:
                   entity_id: light.living_room_liquor_cabinet_light
                 data:
-                  brightness: "{{\n  states(\n    'input_number.home_lighting_liquor_snapshot_brightness'\n  ) | int\n}}"
-                  color_temp_kelvin: "{{\n  states(\n    'input_number.home_lighting_liquor_snapshot_color_temp_kelvin'\n  ) | int\n}}"
+                  brightness: |-
+                    {{
+                      states(
+                        'input_number.home_lighting_liquor_snapshot_brightness'
+                      ) | int
+                    }}
+                  color_temp_kelvin: |-
+                    {{
+                      states(
+                        'input_number.home_lighting_liquor_snapshot_color_temp_kelvin'
+                      ) | int
+                    }}
                   transition: 1
             default:
             - action: light.turn_on
               target:
                 entity_id: light.living_room_liquor_cabinet_light
               data:
-                brightness: "{{\n  states(\n    'input_number.home_lighting_liquor_snapshot_brightness'\n  ) | int\n}}"
+                brightness: |-
+                  {{
+                    states(
+                      'input_number.home_lighting_liquor_snapshot_brightness'
+                    ) | int
+                  }}
                 transition: 1
           - action: input_boolean.turn_off
             target:
               entity_id: input_boolean.home_lighting_liquor_snapshot_valid
         default:
         - action: script.home_lighting_evaluate_and_apply
-  mode: restart
+        - action: input_boolean.turn_off
+          target:
+            entity_id: input_boolean.home_lighting_liquor_snapshot_valid
+  mode: queued
+  max: 20

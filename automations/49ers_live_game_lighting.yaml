@@ -1,0 +1,86 @@
+- id: '1786674024886'
+  alias: 49ers - Live Game Lighting and Score Celebration
+  description: 'Activates the 49ers Celebration lighting scene only while the San
+    Francisco 49ers game is live. Reasserts the scene every 60 seconds during the
+    game so other Hue automations cannot permanently override it. When the 49ers score,
+    the Celebration Hue zone flashes once for every point added after a 15-second
+    television synchronization delay. Regulation and overtime are included because
+    Team Tracker remains IN while the game is live. When the game ends, the Home Lighting Manager reevaluates the correct
+    post-game state so baseline, future holiday lighting, or off can be restored.
+
+    '
+  triggers:
+  - trigger: state
+    entity_id: sensor.nfl_san_francisco_49ers
+    from: PRE
+    to: IN
+    id: game_start
+  - trigger: state
+    entity_id: sensor.nfl_san_francisco_49ers
+    from: IN
+    to: POST
+    id: game_end
+  - trigger: state
+    entity_id: sensor.nfl_san_francisco_49ers
+    attribute: team_score
+    id: score_change
+  - trigger: time_pattern
+    minutes: /1
+    id: reassert_49ers_theme
+  conditions: []
+  actions:
+  - choose:
+    - conditions:
+      - condition: trigger
+        id: game_start
+      sequence:
+      - action: script.home_lighting_evaluate_and_apply
+    - conditions:
+      - condition: trigger
+        id: reassert_49ers_theme
+      - condition: state
+        entity_id: sensor.nfl_san_francisco_49ers
+        state: IN
+      sequence:
+      - action: script.home_lighting_evaluate_and_apply
+    - conditions:
+      - condition: trigger
+        id: score_change
+      - condition: template
+        value_template: "{{\n  trigger.from_state is not none\n  and trigger.to_state
+          is not none\n  and trigger.from_state.state == 'IN'\n  and trigger.to_state.state
+          == 'IN'\n  and trigger.from_state.attributes.get('team_score') is not none\n
+          \ and trigger.to_state.attributes.get('team_score') is not none\n}}\n"
+      - condition: template
+        value_template: "{{\n  (\n    trigger.to_state.attributes.get('team_score')
+          | int\n  )\n  >\n  (\n    trigger.from_state.attributes.get('team_score')
+          | int\n  )\n}}\n"
+      - condition: template
+        value_template: "{{\n  (\n    (\n      trigger.to_state.attributes.get('team_score')
+          | int\n    )\n    -\n    (\n      trigger.from_state.attributes.get('team_score')
+          | int\n    )\n  ) <= 8\n}}\n"
+      sequence:
+      - variables:
+          points_scored: "{{\n  (\n    trigger.to_state.attributes.get('team_score')
+            | int\n  )\n  -\n  (\n    trigger.from_state.attributes.get('team_score')
+            | int\n  )\n}}\n"
+      - delay:
+          seconds: 15
+      - repeat:
+          count: '{{ points_scored | int }}'
+          sequence:
+          - action: light.turn_on
+            target:
+              entity_id: light.celebration
+            data:
+              flash: short
+          - delay:
+              milliseconds: 1500
+      - action: script.home_lighting_evaluate_and_apply
+    - conditions:
+      - condition: trigger
+        id: game_end
+      sequence:
+      - action: script.home_lighting_evaluate_and_apply
+  mode: queued
+  max: 10

@@ -1,0 +1,122 @@
+- id: '1784325704703'
+  alias: Pool and Hot Tub Ready Light Alert
+  description: 'Flashes the kitchen and living room Hue strip lights when the pool
+    or hot tub reaches target temperature, then restores every light to its previous
+    state.
+
+    '
+  triggers:
+  - trigger: state
+    entity_id: input_boolean.hot_tub_ready_notified
+    from: 'off'
+    to: 'on'
+    id: hot_tub
+  - trigger: state
+    entity_id: input_boolean.pool_ready_notified
+    from: 'off'
+    to: 'on'
+    id: pool
+  conditions: []
+  actions:
+  - variables:
+      alert_lights:
+      - light.kitchen_kitchen_left_cabinet_light
+      - light.kitchen_kitchen_right_cabinet_lights
+      - light.living_room_living_room_left_cabinets
+      - light.living_room_living_room_right_cabinet_lights
+      - light.living_room_left_ceiling_light
+      - light.living_room_living_room_right_ceiling
+      alert_rgb: "{% if trigger is defined and trigger.id == 'hot_tub' %}\n  [255,
+        0, 0]\n{% else %}\n  [0, 0, 255]\n{% endif %}\n"
+  - action: scene.create
+    data:
+      scene_id: pool_alert_snapshot
+      snapshot_entities: '{{ alert_lights }}'
+  - repeat:
+      count: 3
+      sequence:
+      - parallel:
+        - action: light.turn_on
+          target:
+            entity_id: light.kitchen_kitchen_left_cabinet_light
+          data:
+            rgb_color: '{{ alert_rgb }}'
+            brightness: 255
+            transition: 0
+        - action: light.turn_on
+          target:
+            entity_id: light.kitchen_kitchen_right_cabinet_lights
+          data:
+            rgb_color: '{{ alert_rgb }}'
+            brightness: 255
+            transition: 0
+        - action: light.turn_on
+          target:
+            entity_id: light.living_room_living_room_left_cabinets
+          data:
+            rgb_color: '{{ alert_rgb }}'
+            brightness: 255
+            transition: 0
+        - action: light.turn_on
+          target:
+            entity_id: light.living_room_living_room_right_cabinet_lights
+          data:
+            rgb_color: '{{ alert_rgb }}'
+            brightness: 255
+            transition: 0
+        - action: light.turn_on
+          target:
+            entity_id: light.living_room_left_ceiling_light
+          data:
+            rgb_color: '{{ alert_rgb }}'
+            brightness: 255
+            transition: 0
+        - action: light.turn_on
+          target:
+            entity_id: light.living_room_living_room_right_ceiling
+          data:
+            rgb_color: '{{ alert_rgb }}'
+            brightness: 255
+            transition: 0
+      - delay:
+          milliseconds: 250
+      - parallel:
+        - action: light.turn_off
+          target:
+            entity_id: light.kitchen_kitchen_left_cabinet_light
+          data:
+            transition: 0
+        - action: light.turn_off
+          target:
+            entity_id: light.kitchen_kitchen_right_cabinet_lights
+          data:
+            transition: 0
+        - action: light.turn_off
+          target:
+            entity_id: light.living_room_living_room_left_cabinets
+          data:
+            transition: 0
+        - action: light.turn_off
+          target:
+            entity_id: light.living_room_living_room_right_cabinet_lights
+          data:
+            transition: 0
+        - action: light.turn_off
+          target:
+            entity_id: light.living_room_left_ceiling_light
+          data:
+            transition: 0
+        - action: light.turn_off
+          target:
+            entity_id: light.living_room_living_room_right_ceiling
+          data:
+            transition: 0
+      - delay:
+          milliseconds: 150
+  - delay:
+      milliseconds: 100
+  - action: scene.turn_on
+    target:
+      entity_id: scene.pool_alert_snapshot
+  mode: queued
+  max: 2

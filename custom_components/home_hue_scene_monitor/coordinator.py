@@ -64,11 +64,12 @@ class HomeHueSceneCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
 
         for zone_key, zone in MANAGED_ZONES.items():
             group_id = zone["group_id"]
+            group_ids = (group_id, *zone.get("additional_group_ids", ()))
 
             matching = [
                 scene
                 for scene in scenes
-                if (scene.get("group") or {}).get("rid") == group_id
+                if (scene.get("group") or {}).get("rid") in group_ids
             ]
 
             recalled = [
@@ -84,6 +85,8 @@ class HomeHueSceneCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                     "last_recall": None,
                     "active": None,
                     "hue_group_id": group_id,
+                    "monitored_hue_group_ids": list(group_ids),
+                    "recalled_hue_group_id": None,
                     "scene_count": len(matching),
                 }
                 continue
@@ -104,6 +107,8 @@ class HomeHueSceneCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 "last_recall": status.get("last_recall"),
                 "active": status.get("active"),
                 "hue_group_id": group_id,
+                "monitored_hue_group_ids": list(group_ids),
+                "recalled_hue_group_id": (latest.get("group") or {}).get("rid"),
                 "scene_count": len(matching),
             }
 

@@ -1,0 +1,59 @@
+- id: '1784853792811'
+  alias: Powerwall - Flash House Lights on Grid Failure
+  description: 'Flashes Kitchen, Living Room, and Dining Room lights when utility
+    power has been lost for at least two seconds.
+
+    '
+  triggers:
+  - trigger: state
+    entity_id: binary_sensor.1_powerwall_grid_status
+    from: 'on'
+    to: 'off'
+    for:
+      seconds: 2
+  - trigger: state
+    entity_id: binary_sensor.3_powerwalls_grid_status
+    from: 'on'
+    to: 'off'
+    for:
+      seconds: 2
+  conditions:
+  - condition: template
+    value_template: "{{\n  is_state('binary_sensor.1_powerwall_grid_status', 'off')\n
+      \ or\n  is_state('binary_sensor.3_powerwalls_grid_status', 'off')\n}}\n"
+  actions:
+  - action: scene.create
+    data:
+      scene_id: powerwall_outage_snapshot
+      snapshot_entities:
+      - light.kitchen_kitchen
+      - light.living_room_living_room
+      - light.dining_room_dining_room_main_lights_1
+  - delay:
+      milliseconds: 250
+  - repeat:
+      count: 3
+      sequence:
+      - action: light.turn_on
+        target:
+          entity_id:
+          - light.kitchen_kitchen
+          - light.living_room_living_room
+          - light.dining_room_dining_room_main_lights_1
+        data:
+          brightness_pct: 100
+      - delay:
+          milliseconds: 500
+      - action: light.turn_off
+        target:
+          entity_id:
+          - light.kitchen_kitchen
+          - light.living_room_living_room
+          - light.dining_room_dining_room_main_lights_1
+      - delay:
+          milliseconds: 500
+  - action: scene.turn_on
+    target:
+      entity_id: scene.powerwall_outage_snapshot
+  mode: single
+  max_exceeded: silent

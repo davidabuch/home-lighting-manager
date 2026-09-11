@@ -1188,10 +1188,12 @@ automation:
     alias: "Home Lighting - Manual Ownership Detector"
     description: >
       Detects externally initiated OFF-to-ON and ON-to-OFF transitions
-      of managed Hue lighting surfaces. HA-command guards prevent
-      manager-owned transitions from being mistaken for homeowner Manual.
-      Turning a manually owned surface OFF relinquishes ownership and
-      triggers authoritative reevaluation after Hue settles.
+      of managed Hue lighting surfaces plus genuine newer raw Hue scene
+      recalls. Hue telemetry availability/recovery changes are not Manual
+      intent. HA-command guards prevent manager-owned transitions from being
+      mistaken for homeowner Manual. Turning a manually owned surface OFF
+      relinquishes ownership and triggers authoritative reevaluation after
+      Hue settles.
     mode: parallel
     max: 20
 
@@ -1281,6 +1283,41 @@ automation:
 
     actions:
 
+      # A raw Hue last_recall change is homeowner intent only when both
+      # sides of the transition are valid timestamps and the new recall
+      # is strictly newer. This deliberately rejects:
+      #   valid -> unavailable/unknown
+      #   unavailable/unknown -> valid
+      #   malformed values
+      #   identical timestamps
+      - variables:
+          hue_scene_recall_is_newer: >-
+            {% set old =
+              trigger.from_state.state
+              if trigger.from_state is not none
+              else none
+            %}
+            {% set new =
+              trigger.to_state.state
+              if trigger.to_state is not none
+              else none
+            %}
+            {% set old_ts =
+              as_timestamp(old, none)
+              if old not in [none, 'unknown', 'unavailable']
+              else none
+            %}
+            {% set new_ts =
+              as_timestamp(new, none)
+              if new not in [none, 'unknown', 'unavailable']
+              else none
+            %}
+            {{
+              old_ts is not none
+              and new_ts is not none
+              and new_ts > old_ts
+            }}
+
       - choose:
 
           # ------------------------------------------------------
@@ -1290,6 +1327,8 @@ automation:
           - conditions:
               - condition: trigger
                 id: main_scene_recall
+              - condition: template
+                value_template: "{{ hue_scene_recall_is_newer | bool }}"
               - condition: state
                 entity_id: input_boolean.home_lighting_ha_guard_main_area
                 state: "off"
@@ -1320,6 +1359,8 @@ automation:
           - conditions:
               - condition: trigger
                 id: front_eve_scene_recall
+              - condition: template
+                value_template: "{{ hue_scene_recall_is_newer | bool }}"
               - condition: state
                 entity_id: input_boolean.home_lighting_ha_guard_front_eve
                 state: "off"
@@ -1335,6 +1376,8 @@ automation:
           - conditions:
               - condition: trigger
                 id: path_scene_recall
+              - condition: template
+                value_template: "{{ hue_scene_recall_is_newer | bool }}"
               - condition: state
                 entity_id: input_boolean.home_lighting_ha_guard_path
                 state: "off"
@@ -1350,6 +1393,8 @@ automation:
           - conditions:
               - condition: trigger
                 id: backyard_scene_recall
+              - condition: template
+                value_template: "{{ hue_scene_recall_is_newer | bool }}"
               - condition: state
                 entity_id: input_boolean.home_lighting_ha_guard_backyard
                 state: "off"

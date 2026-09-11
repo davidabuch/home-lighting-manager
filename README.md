@@ -2,7 +2,7 @@
 
 A Home Assistant lighting-orchestration package for deterministic ownership of several Philips Hue lighting surfaces.
 
-This repository contains the production Home Lighting Manager package and the closely coupled Liquor Cabinet Display Lighting automation.
+This repository contains the Home Lighting Manager package, its coupled automations, and review-branch reconciliation code. See [the reconciliation review](docs/reconciliation-review.md) for implementation scope, validation evidence, and installation/rollback instructions. Nothing in this branch has been deployed.
 
 ## Managed surfaces
 
@@ -148,15 +148,15 @@ Unsupported calendar holidays do not take lighting ownership.
 
 ## 49ers integration
 
-The 49ers scoring/celebration automation is intentionally **not included in this repository**.
+The 49ers scoring/celebration automation is now included under `automations/49ers_live_game_lighting.yaml`, imported unchanged from the supplied runtime evidence. Import it by its existing ID; do not create a second copy.
 
-Home Lighting Manager only consumes the Team Tracker state:
+Home Lighting Manager consumes the Team Tracker state:
 
 `sensor.nfl_san_francisco_49ers`
 
 The central evaluator treats state `IN` as a live game and gives 49ers lighting priority over Holiday lighting.
 
-The separate game automation remains responsible for score celebrations and periodic theme reassertion.
+The game automation remains responsible for score celebrations and periodic theme reassertion. Its running/queued action count suppresses reconciliation until restoration completes.
 
 ### Commissioned crossover behavior
 
@@ -219,3 +219,26 @@ Home Hue Scene Monitor is bundled directly in this repository.
 Do not commit Home Assistant `.storage`, databases, access tokens, Hue API keys, backup files, or test-state files.
 
 The Home Hue Scene Monitor retrieves the Hue application key at runtime from the existing Home Assistant Hue config entry; no Hue credential is stored in this repository.
+
+## Central reconciliation
+
+One scheduler verifies current ownership roughly 30 seconds after ownership/restoration events. Healthy checks send no lighting commands. Repairs use existing HA guards and at most two attempts with ten-second reverifications. The health entity is `sensor.home_lighting_reconciliation_health`.
+
+The read-only `script.home_lighting_resolve_owners` supplies the existing evaluators and verifier. Static targets/values come from the loaded baseline scripts; dynamic participation comes from live Hue scene actions. Sync, Manual, Spa Gauge, and active alerts are protected. Pillars retain their independent existing scheduler.
+
+The scene monitor retains its four sensor IDs and now observes equivalent Daily/Holiday room/zone groups for Path and Backyard. Manual detection uses recall timestamp changes, not attribute-only activity. See [the exact group mapping](docs/scene-monitor-coverage.md).
+
+The exported pool-ready, Powerwall, and Spa Session Manager automations retain their runtime action sequences. Spa Temperature Color adds Manual protection, and the liquor automation serializes door events so the first snapshot survives the second opening. Existing dynamic snapshot scenes in pool/spa/Powerwall alerts are preserved; no new dynamic scenes are introduced.
+
+## Offline tests
+
+Use Python 3.13 in an isolated environment:
+
+```sh
+pip install -r requirements-test.txt
+LITELLM_LOCAL_MODEL_COST_MAP=True pytest -q
+ruff check custom_components/home_lighting_reconciliation tests
+python -m compileall -q custom_components
+```
+
+These tests execute Home Assistant's script/trigger engine with simulated device services. They do not connect to Hue or validate physical radio delivery. Physical acceptance remains a separate, review-approved commissioning step.

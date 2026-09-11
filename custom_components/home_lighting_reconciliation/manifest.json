@@ -1,0 +1,10 @@
+{
+  "domain": "home_lighting_reconciliation",
+  "name": "Home Lighting Reconciliation",
+  "codeowners": ["@davidabuch"],
+  "dependencies": ["automation", "hue", "script"],
+  "documentation": "https://github.com/davidabuch/home-lighting-manager",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/davidabuch/home-lighting-manager/issues",
+  "version": "0.1.0"
+}

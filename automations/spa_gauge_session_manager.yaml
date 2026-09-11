@@ -1,0 +1,78 @@
+- id: '1784335425206'
+  alias: Spa Gauge - Session Manager
+  description: >
+    Starts the spa temperature gauge after Heat has remained on for
+    30 seconds. While active, the Spa Gauge owns the Backyard lighting
+    surface and the Home Lighting Manager will not issue Backyard light
+    commands. When the spa turns off, gauge ownership is released and
+    the Backyard Lighting Manager reevaluates the current daily window.
+  triggers:
+  - trigger: state
+    entity_id: climate.poolos_native_intellicenter_hot_tub_thermostat
+    to: heat
+    for: 00:00:30
+    id: spa_started
+  - trigger: state
+    entity_id: climate.poolos_native_intellicenter_hot_tub_thermostat
+    to: 'off'
+    id: spa_stopped
+  conditions: []
+  actions:
+  - choose:
+    - conditions:
+      - condition: trigger
+        id: spa_started
+      sequence:
+      - action: scene.create
+        data:
+          scene_id: spa_gauge_saved_state
+          snapshot_entities:
+          - light.backyard_spa_strip_lights
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.spa_gauge_blinked
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.spa_gauge_active
+
+    - conditions:
+      - condition: trigger
+        id: spa_stopped
+      sequence:
+
+      # Release logical Spa Gauge ownership.
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.spa_gauge_active
+
+      # Explicitly terminate any running Temperature Color action.
+      # This is required because a Hue light transition already sent
+      # by the gauge can otherwise finish after Backyard restoration
+      # and turn the spa strip back on at its last gauge state.
+      - action: automation.turn_off
+        target:
+          entity_id: automation.spa_gauge_temperature_color
+        data:
+          stop_actions: true
+
+      # The longest Spa Gauge Hue transition is 2.5 seconds.
+      # Allow any command already accepted by Hue to finish before
+      # the Backyard manager establishes the authoritative final state.
+      - delay:
+          seconds: 3
+
+      # The Backyard manager is authoritative:
+      #   Sync ON    -> yield to Sync
+      #   window ON  -> native ROOM Forest Adventure scene
+      #   window OFF -> Backyard OFF
+      - action: script.home_lighting_evaluate_backyard
+
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.spa_gauge_blinked
+
+      # Prepare Temperature Color for the next spa session.
+      - action: automation.turn_on
+        target:
+          entity_id: automation.spa_gauge_temperature_color
+  mode: restart

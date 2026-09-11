@@ -20,9 +20,16 @@ MANAGED_ZONES = {
     "path": {
         "name": "Path",
         "group_id": "d1e5ec88-d6e5-4dc7-9bf6-1113be8d6bb9",
+        # Same six physical lights; Daily and Holiday use different Hue zones.
+        "additional_group_ids": ("0ba84dd4-0fe1-4440-9b65-ea7ea1feff35",),
     },
     "backyard": {
         "name": "Backyard",
         "group_id": "873874ab-e1d2-473f-8430-2ef2fafb5a15",
+        # These room/zone resources resolve to the same eleven physical lights.
+        "additional_group_ids": (
+            "87285951-8893-497d-bd77-f618bd5b82e9",
+            "bd7521e2-86b3-4679-8de1-e585c1089d66",
+        ),
     },
 }

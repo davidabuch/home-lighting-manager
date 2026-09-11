@@ -1,0 +1,6 @@
+# Offline tests run HA's real Script/trigger engine with fake device services.
+homeassistant==2025.12.5
+pytest==9.1.1
+pytest-asyncio==1.4.0
+PyYAML==6.0.3
+ruff==0.16.6

@@ -92,5 +92,7 @@ class HomeHueSceneRecallSensor(
             "last_recall": data.get("last_recall"),
             "active": data.get("active"),
             "hue_group_id": data.get("hue_group_id"),
+            "monitored_hue_group_ids": data.get("monitored_hue_group_ids"),
+            "recalled_hue_group_id": data.get("recalled_hue_group_id"),
             "scene_count": data.get("scene_count"),
         }

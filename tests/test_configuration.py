@@ -256,3 +256,135 @@ def test_all_main_area_manual_helpers_exist():
     }
 
     assert expected.issubset(PACKAGE["input_boolean"])
+
+
+def _manual_ownership_detector():
+    automations = PACKAGE["automation"]
+
+    if isinstance(automations, dict):
+        automations = list(automations.values())
+
+    return next(
+        automation
+        for automation in automations
+        if automation.get("id") == "home_lighting_manual_ownership_detector_v1"
+    )
+
+
+def _detector_choice(trigger_id):
+    detector = _manual_ownership_detector()
+
+    choose_step = next(
+        step
+        for step in detector["actions"]
+        if isinstance(step, dict) and "choose" in step
+    )
+
+    for choice in choose_step["choose"]:
+        for condition in choice.get("conditions", []):
+            if (
+                condition.get("condition") == "trigger"
+                and condition.get("id") == trigger_id
+            ):
+                return choice
+
+    raise AssertionError(f"Detector choice not found: {trigger_id}")
+
+
+def _contains_action(sequence, action):
+    for step in sequence:
+        if not isinstance(step, dict):
+            continue
+
+        if step.get("action") == action:
+            return True
+
+        for key in ("sequence", "then", "else", "default"):
+            child = step.get(key)
+            if isinstance(child, list) and _contains_action(child, action):
+                return True
+
+        choose = step.get("choose")
+        if isinstance(choose, list):
+            for choice in choose:
+                if _contains_action(choice.get("sequence", []), action):
+                    return True
+
+    return False
+
+
+def test_main_area_external_off_asserts_per_light_manual_ownership():
+    """External Main Area ON->OFF is per-light Manual intent, not release."""
+
+    choice = _detector_choice("main_member_off")
+    conditions = choice["conditions"]
+    sequence = choice["sequence"]
+
+    assert {
+        "condition": "state",
+        "entity_id": "input_boolean.home_lighting_ha_guard_main_area",
+        "state": "off",
+    } in conditions
+
+    assert {
+        "condition": "state",
+        "entity_id": "binary_sensor.hue_bridge_living_room",
+        "state": "off",
+    } in conditions
+
+    assert sequence[0] == {
+        "action": "input_boolean.turn_on",
+        "target": {"entity_id": "{{ main_area_manual_helper }}"},
+    }
+
+    assert sequence[1] == {
+        "action": "input_boolean.turn_on",
+        "target": {
+            "entity_id": "input_boolean.home_lighting_manual_main_area"
+        },
+    }
+
+    assert not _contains_action(
+        sequence,
+        "script.home_lighting_evaluate_and_apply",
+    )
+
+    assert not _contains_action(
+        sequence,
+        "input_boolean.turn_off",
+    )
+
+
+def test_main_area_external_on_and_off_have_same_manual_claim_semantics():
+    """Both homeowner state directions claim the exact Main Area member."""
+
+    on_choice = _detector_choice("main_member_on")
+    off_choice = _detector_choice("main_member_off")
+
+    for choice in (on_choice, off_choice):
+        sequence = choice["sequence"]
+
+        assert sequence[0] == {
+            "action": "input_boolean.turn_on",
+            "target": {"entity_id": "{{ main_area_manual_helper }}"},
+        }
+
+        assert sequence[1] == {
+            "action": "input_boolean.turn_on",
+            "target": {
+                "entity_id": "input_boolean.home_lighting_manual_main_area"
+            },
+        }
+
+
+def test_main_area_manual_member_transitions_are_guarded_from_ha_commands():
+    """HA-owned Main Area transitions remain excluded from Manual claiming."""
+
+    for trigger_id in ("main_member_on", "main_member_off"):
+        choice = _detector_choice(trigger_id)
+
+        assert {
+            "condition": "state",
+            "entity_id": "input_boolean.home_lighting_ha_guard_main_area",
+            "state": "off",
+        } in choice["conditions"]

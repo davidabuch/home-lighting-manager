@@ -106,6 +106,11 @@ def verify(owners, states, scripts, members, scene_info, suppressed=None):
     door = owners["liquor_cabinet"]["owner"] == "door"
     for surface in SURFACES:
         owner = owners[surface]["owner"]
+        manual_entities = (
+            set(owners["main_area"].get("manual_entities", []))
+            if surface == "main_area"
+            else set()
+        )
         if surface in suppressed or owner in ("sync", "manual", "spa"):
             out.skipped[surface] = suppressed.get(surface, owner)
             # Manual has a functional liquor exception; Sync and transients do not.
@@ -122,6 +127,8 @@ def verify(owners, states, scripts, members, scene_info, suppressed=None):
             continue
         if owner == "off":
             for entity in members[surface]:
+                if entity in manual_entities:
+                    continue
                 if entity != LIQUOR or not door:
                     _static(out, surface, states, "light.turn_off", entity, {"transition": 0})
         elif owner == "daily":
@@ -129,6 +136,8 @@ def verify(owners, states, scripts, members, scene_info, suppressed=None):
                 scripts["home_lighting_apply_" + surface + "_baseline"]["sequence"]
             )
             for service, entity, data in baseline:
+                if entity in manual_entities:
+                    continue
                 if service == "scene.turn_on":
                     _scene(out, surface, entity, states, scene_info, members[surface], door)
                 elif entity != LIQUOR or not door:
@@ -144,7 +153,17 @@ def verify(owners, states, scripts, members, scene_info, suppressed=None):
                         _static(out, surface, states, service, entity, data)
         elif owner in ("holiday", "49ers"):
             scene = owners[surface]["scene"]
-            _scene(out, surface, scene, states, scene_info, members[surface], door)
+            protected = manual_entities if surface == "main_area" else set()
+            _scene(
+                out,
+                surface,
+                scene,
+                states,
+                scene_info,
+                members[surface],
+                door,
+                protected=protected,
+            )
         else:
             out.issues.append({"surface": surface, "error": "unknown owner", "owner": owner})
         if surface == "main_area" and door:
@@ -165,7 +184,8 @@ def _static(out, surface, states, service, entity, data):
             out.commands.append(Command(surface, service, entity, data))
 
 
-def _scene(out, surface, scene, states, scene_info, members, door):
+def _scene(out, surface, scene, states, scene_info, members, door, protected=None):
+    protected = set(protected or ())
     info = scene_info.get(scene)
     if not info or info.get("error"):
         out.issues.append(
@@ -198,11 +218,29 @@ def _scene(out, surface, scene, states, scene_info, members, door):
         return
     unavailable = False
     drift = False
-    for entity, on in expected.items():
+    for entity, scene_action in expected.items():
+        if entity in protected:
+            continue
         if entity == LIQUOR and door:
             continue
+
+        action = scene_action.get("action", {})
+        on = action.get("on", {}).get("on")
+
+        if not isinstance(on, bool):
+            out.issues.append(
+                {
+                    "surface": surface,
+                    "entity": entity,
+                    "error": "scene action missing authoritative on/off state",
+                }
+            )
+            continue
+
         diff, available = static_diff(
-            states.get(entity), "light.turn_on" if on else "light.turn_off", {}
+            states.get(entity),
+            "light.turn_on" if on else "light.turn_off",
+            {},
         )
         if diff:
             out.issues.append({"surface": surface, "entity": entity, "difference": diff})
@@ -220,4 +258,14 @@ def _scene(out, surface, scene, states, scene_info, members, door):
                 }
             )
         else:
-            out.commands.append(Command(surface, "scene.turn_on", scene))
+            if protected:
+                out.commands.append(
+                    Command(
+                        surface,
+                        "hue.apply_scene_actions",
+                        scene,
+                        {"protected": sorted(protected)},
+                    )
+                )
+            else:
+                out.commands.append(Command(surface, "scene.turn_on", scene))

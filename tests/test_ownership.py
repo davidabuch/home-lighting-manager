@@ -21,7 +21,7 @@ async def test_priority_matrix_and_independent_surfaces(rig):
         owners = (await rig.run("home_lighting_resolve_owners")).service_response
         lower = "holiday" if holiday else "daily" if daily else "off"
         assert owners["main_area"]["owner"] == (
-            "sync" if sync else "manual" if manual else "49ers" if game else lower
+            "sync" if sync else "49ers" if game else lower
         )
         assert owners["front_eve"]["owner"] == ("manual" if manual else "49ers" if game else lower)
         assert owners["path"]["owner"] == ("manual" if manual else lower)
@@ -33,7 +33,10 @@ async def test_priority_matrix_and_independent_surfaces(rig):
     rig.set("input_boolean.home_lighting_manual_front_eve", "off")
     rig.calls.clear()
     await rig.run("home_lighting_evaluate_and_apply")
-    assert [d["entity_id"] for _, d in rig.lights()] == ["scene.front_eve_zone_49ers"]
+    assert [d["entity_id"] for _, d in rig.lights()] == [
+        "scene.front_eve_zone_49ers",
+        "scene.holiday_main_area_49ers",
+    ]
 
 
 def automation(rig, filename, name, fast=False):
@@ -267,7 +270,7 @@ async def test_overnight_boundary_releases_owners_without_master_zone(rig):
 
 
 @pytest.mark.asyncio
-async def test_startup_reconstructs_evening_without_stealing_manual(rig, monkeypatch):
+async def test_startup_legacy_main_area_aggregate_does_not_suppress_automatic_owner(rig, monkeypatch):
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
@@ -284,7 +287,8 @@ async def test_startup_reconstructs_evening_without_stealing_manual(rig, monkeyp
     rig.install_script("startup_test", {"sequence": a["actions"], "mode": a["mode"]})
     await rig.run("startup_test", {"trigger": {"id": "startup_reconcile"}})
     owners = (await rig.run("home_lighting_resolve_owners")).service_response
-    assert owners["main_area"]["owner"] == "manual"
+    assert owners["main_area"]["owner"] == "holiday"
+    assert owners["main_area"]["manual_entities"] == []
     assert all(owners[s]["owner"] == "holiday" for s in ["front_eve", "path", "backyard"])
     assert all(
         rig.get("input_boolean.home_lighting_" + s + "_window").state == "on"
@@ -310,3 +314,84 @@ async def test_liquor_known_manual_scene_restores_native_scene(rig):
     await rig.run("liquor_cabinet_display_lighting", {"trigger": {"id": "right_closed"}})
     assert rig.lights()[-1] == ("scene.turn_on", {"entity_id": "scene.holiday_main_area_49ers"})
     assert not any(service == "scene.create" for service, _ in rig.calls)
+
+
+@pytest.mark.asyncio
+async def test_main_area_daily_skips_only_manual_member(rig):
+    """A manual kitchen light must not suppress sunset for the rest of Main Area."""
+
+    manual = "light.kitchen_kitchen_left_cabinet_light"
+
+    rig.set("input_boolean.home_lighting_main_area_window", "on")
+    rig.set(
+        "input_boolean.home_lighting_manual_kitchen_left_cabinet",
+        "on",
+    )
+    rig.set("input_boolean.home_lighting_manual_main_area", "on")
+
+    await rig.run("home_lighting_evaluate_and_apply")
+
+    light_targets = [
+        data["entity_id"]
+        for _, data in rig.lights()
+        if isinstance(data.get("entity_id"), str)
+    ]
+
+    assert manual not in light_targets
+
+    assert "light.kitchen_kitchen_right_cabinet_lights" in light_targets
+    assert "light.living_room_living_room_left_cabinets" in light_targets
+    assert "light.living_room_living_room_right_cabinet_lights" in light_targets
+    assert "light.living_room_left_ceiling_light" in light_targets
+    assert "light.living_room_living_room_right_ceiling" in light_targets
+    assert "light.living_room_liquor_cabinet_light" in light_targets
+
+
+@pytest.mark.asyncio
+async def test_main_area_automatic_owner_survives_partial_manual(rig):
+    """Per-light Manual must not convert the whole Main Area owner to Manual."""
+
+    rig.set("input_boolean.home_lighting_main_area_window", "on")
+    rig.set(
+        "input_boolean.home_lighting_manual_kitchen_left_cabinet",
+        "on",
+    )
+    rig.set("input_boolean.home_lighting_manual_main_area", "on")
+
+    owners = (
+        await rig.run("home_lighting_resolve_owners")
+    ).service_response
+
+    assert owners["main_area"]["owner"] == "daily"
+    assert owners["main_area"]["manual_entities"] == [
+        "light.kitchen_kitchen_left_cabinet_light"
+    ]
+
+
+def test_main_area_detector_uses_member_state_triggers():
+    """Main Area Manual detection must never depend on aggregate zone ON/OFF."""
+
+    detector = next(
+        a
+        for a in PACKAGE["automation"]
+        if a["id"] == "home_lighting_manual_ownership_detector_v1"
+    )
+
+    triggers = {t["id"]: t for t in detector["triggers"]}
+
+    assert "main_on" not in triggers
+    assert "main_off" not in triggers
+
+    members = triggers["main_member_on"]["entity_id"]
+
+    assert set(members) == {
+        "light.kitchen_kitchen_left_cabinet_light",
+        "light.kitchen_kitchen_right_cabinet_lights",
+        "light.living_room_living_room_left_cabinets",
+        "light.living_room_living_room_right_cabinet_lights",
+        "light.living_room_liquor_cabinet_light",
+        "light.living_room_left_ceiling_light",
+        "light.living_room_living_room_right_ceiling",
+    }
+
+    assert triggers["main_member_off"]["entity_id"] == members

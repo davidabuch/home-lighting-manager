@@ -46,6 +46,33 @@ input_boolean:
   home_lighting_manual_main_area:
     name: "Home Lighting Manual Main Area"
 
+  # Main Area entity-level Manual ownership.
+  #
+  # These helpers identify exactly which managed Hue lights have
+  # been claimed by external/homeowner control. The legacy
+  # home_lighting_manual_main_area helper remains temporarily for
+  # migration/compatibility and will later become an aggregate.
+  home_lighting_manual_kitchen_left_cabinet:
+    name: "Home Lighting Manual Kitchen Left Cabinet"
+
+  home_lighting_manual_kitchen_right_cabinet:
+    name: "Home Lighting Manual Kitchen Right Cabinet"
+
+  home_lighting_manual_living_left_cabinets:
+    name: "Home Lighting Manual Living Left Cabinets"
+
+  home_lighting_manual_living_right_cabinets:
+    name: "Home Lighting Manual Living Right Cabinets"
+
+  home_lighting_manual_living_left_ceiling:
+    name: "Home Lighting Manual Living Left Ceiling"
+
+  home_lighting_manual_living_right_ceiling:
+    name: "Home Lighting Manual Living Right Ceiling"
+
+  home_lighting_manual_liquor_cabinet:
+    name: "Home Lighting Manual Liquor Cabinet"
+
   home_lighting_manual_front_eve:
     name: "Home Lighting Manual Front Eve"
 
@@ -156,6 +183,44 @@ script:
       living_room_sync_active: '{{ is_state(''binary_sensor.hue_bridge_living_room'', ''on'') }}'
       manual_main_area_active: '{{ is_state(''input_boolean.home_lighting_manual_main_area'', ''on'')
         }}'
+      manual_main_area_entities: >-
+        {% set ns = namespace(entities=[]) %}
+        {% set ownership = [
+          (
+            'light.kitchen_kitchen_left_cabinet_light',
+            'input_boolean.home_lighting_manual_kitchen_left_cabinet'
+          ),
+          (
+            'light.kitchen_kitchen_right_cabinet_lights',
+            'input_boolean.home_lighting_manual_kitchen_right_cabinet'
+          ),
+          (
+            'light.living_room_living_room_left_cabinets',
+            'input_boolean.home_lighting_manual_living_left_cabinets'
+          ),
+          (
+            'light.living_room_living_room_right_cabinet_lights',
+            'input_boolean.home_lighting_manual_living_right_cabinets'
+          ),
+          (
+            'light.living_room_left_ceiling_light',
+            'input_boolean.home_lighting_manual_living_left_ceiling'
+          ),
+          (
+            'light.living_room_living_room_right_ceiling',
+            'input_boolean.home_lighting_manual_living_right_ceiling'
+          ),
+          (
+            'light.living_room_liquor_cabinet_light',
+            'input_boolean.home_lighting_manual_liquor_cabinet'
+          )
+        ] %}
+        {% for entity, helper in ownership %}
+          {% if is_state(helper, 'on') %}
+            {% set ns.entities = ns.entities + [entity] %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.entities }}
       manual_front_eve_active: '{{ is_state(''input_boolean.home_lighting_manual_front_eve'', ''on'')
         }}'
       liquor_cabinet_open: |-
@@ -212,7 +277,7 @@ script:
           'hanukkah': 'scene.holiday_backyard_hanukkah'
         } %} {{ scenes.get(holiday_key, '') }}
       owner_main_area: >-
-        {{ 'sync' if living_room_sync_active else 'manual' if manual_main_area_active else '49ers'
+        {{ 'sync' if living_room_sync_active else '49ers'
         if game_live else 'holiday' if holiday_active and holiday_main_scene else 'daily' if main_area_baseline_eligible
         else 'off' }}
       owner_front_eve: >-
@@ -232,6 +297,7 @@ script:
           owner: '{{ owner_main_area }}'
           scene: '{{ ''scene.holiday_main_area_49ers'' if owner_main_area == ''49ers'' else holiday_main_scene
             }}'
+          manual_entities: '{{ manual_main_area_entities }}'
         front_eve:
           owner: '{{ owner_front_eve }}'
           scene: '{{ ''scene.front_eve_zone_49ers'' if owner_front_eve == ''49ers'' else holiday_eve_scene
@@ -244,7 +310,8 @@ script:
           scene: '{{ holiday_backyard_scene }}'
         liquor_cabinet:
           owner: '{{ ''sync'' if living_room_sync_active else ''door'' if liquor_cabinet_open else
-            owner_main_area }}'
+            ''manual'' if is_state(''input_boolean.home_lighting_manual_liquor_cabinet'', ''on'')
+            else owner_main_area }}'
         pillars:
           owner: '{{ ''daily'' if is_state(''input_boolean.home_lighting_pillar_window'', ''on'') else
             ''off'' }}'
@@ -330,52 +397,75 @@ script:
       - parallel:
 
           # Kitchen Left Cabinet
-          - action: light.turn_on
-            target:
-              entity_id: light.kitchen_kitchen_left_cabinet_light
-            data:
-              brightness: 255
-              color_temp_kelvin: 2724
-              effect: "off"
-              transition: 0
+          - if:
+              - condition: state
+                entity_id: input_boolean.home_lighting_manual_kitchen_left_cabinet
+                state: "off"
+            then:
+              - action: light.turn_on
+                target:
+                  entity_id: light.kitchen_kitchen_left_cabinet_light
+                data:
+                  brightness: 255
+                  color_temp_kelvin: 2724
+                  effect: "off"
+                  transition: 0
 
           # Kitchen Right Cabinets
-          - action: light.turn_on
-            target:
-              entity_id: light.kitchen_kitchen_right_cabinet_lights
-            data:
-              brightness: 255
-              color_temp_kelvin: 2724
-              effect: "off"
-              transition: 0
+          - if:
+              - condition: state
+                entity_id: input_boolean.home_lighting_manual_kitchen_right_cabinet
+                state: "off"
+            then:
+              - action: light.turn_on
+                target:
+                  entity_id: light.kitchen_kitchen_right_cabinet_lights
+                data:
+                  brightness: 255
+                  color_temp_kelvin: 2724
+                  effect: "off"
+                  transition: 0
 
           # Living Room Left Cabinets
-          - action: light.turn_on
-            target:
-              entity_id: light.living_room_living_room_left_cabinets
-            data:
-              brightness: 183
-              xy_color:
-                - 0.4711
-                - 0.3867
-              effect: "off"
-              transition: 0
+          - if:
+              - condition: state
+                entity_id: input_boolean.home_lighting_manual_living_left_cabinets
+                state: "off"
+            then:
+              - action: light.turn_on
+                target:
+                  entity_id: light.living_room_living_room_left_cabinets
+                data:
+                  brightness: 183
+                  xy_color:
+                    - 0.4711
+                    - 0.3867
+                  effect: "off"
+                  transition: 0
 
           # Living Room Right Cabinets
-          - action: light.turn_on
-            target:
-              entity_id: light.living_room_living_room_right_cabinet_lights
-            data:
-              brightness: 183
-              xy_color:
-                - 0.4711
-                - 0.3867
-              effect: "off"
-              transition: 0
+          - if:
+              - condition: state
+                entity_id: input_boolean.home_lighting_manual_living_right_cabinets
+                state: "off"
+            then:
+              - action: light.turn_on
+                target:
+                  entity_id: light.living_room_living_room_right_cabinet_lights
+                data:
+                  brightness: 183
+                  xy_color:
+                    - 0.4711
+                    - 0.3867
+                  effect: "off"
+                  transition: 0
 
           # Liquor Cabinet
           # Existing door-open automation remains authoritative.
           - if:
+              - condition: state
+                entity_id: input_boolean.home_lighting_manual_liquor_cabinet
+                state: "off"
               - condition: state
                 entity_id: binary_sensor.liquor_cabinet_door_r
                 state: "off"
@@ -395,28 +485,38 @@ script:
                   transition: 0
 
           # Living Room Left Ceiling
-          - action: light.turn_on
-            target:
-              entity_id: light.living_room_left_ceiling_light
-            data:
-              brightness: 43
-              xy_color:
-                - 0.4711
-                - 0.3867
-              effect: "off"
-              transition: 0
+          - if:
+              - condition: state
+                entity_id: input_boolean.home_lighting_manual_living_left_ceiling
+                state: "off"
+            then:
+              - action: light.turn_on
+                target:
+                  entity_id: light.living_room_left_ceiling_light
+                data:
+                  brightness: 43
+                  xy_color:
+                    - 0.4711
+                    - 0.3867
+                  effect: "off"
+                  transition: 0
 
           # Living Room Right Ceiling
-          - action: light.turn_on
-            target:
-              entity_id: light.living_room_living_room_right_ceiling
-            data:
-              brightness: 43
-              xy_color:
-                - 0.4711
-                - 0.3867
-              effect: "off"
-              transition: 0
+          - if:
+              - condition: state
+                entity_id: input_boolean.home_lighting_manual_living_right_ceiling
+                state: "off"
+            then:
+              - action: light.turn_on
+                target:
+                  entity_id: light.living_room_living_room_right_ceiling
+                data:
+                  brightness: 43
+                  xy_color:
+                    - 0.4711
+                    - 0.3867
+                  effect: "off"
+                  transition: 0
 
 
   # ============================================================
@@ -429,11 +529,36 @@ script:
       Turns off the Hue Main Area as one grouped-light command for synchronized and reliable shutdown. If a liquor-cabinet door is open, the functional bright-white cabinet override is immediately reasserted after the group turns off.
     mode: restart
     sequence:
-    - action: light.turn_off
-      target:
-        entity_id: light.holiday_main_area
-      data:
-        transition: 0
+    - action: script.home_lighting_resolve_owners
+      response_variable: current
+
+    - variables:
+        automatic_entities: >-
+          {% set all_entities = [
+            'light.kitchen_kitchen_left_cabinet_light',
+            'light.kitchen_kitchen_right_cabinet_lights',
+            'light.living_room_living_room_left_cabinets',
+            'light.living_room_living_room_right_cabinet_lights',
+            'light.living_room_liquor_cabinet_light',
+            'light.living_room_left_ceiling_light',
+            'light.living_room_living_room_right_ceiling'
+          ] %}
+          {{
+            all_entities
+            | reject('in', current.main_area.manual_entities)
+            | list
+          }}
+
+    - if:
+      - condition: template
+        value_template: "{{ automatic_entities | count > 0 }}"
+      then:
+      - action: light.turn_off
+        target:
+          entity_id: "{{ automatic_entities }}"
+        data:
+          transition: 0
+
     - if:
       - condition: or
         conditions:
@@ -1200,16 +1325,30 @@ automation:
     triggers:
 
       - trigger: state
-        entity_id: light.holiday_main_area
+        entity_id:
+          - light.kitchen_kitchen_left_cabinet_light
+          - light.kitchen_kitchen_right_cabinet_lights
+          - light.living_room_living_room_left_cabinets
+          - light.living_room_living_room_right_cabinet_lights
+          - light.living_room_liquor_cabinet_light
+          - light.living_room_left_ceiling_light
+          - light.living_room_living_room_right_ceiling
         from: "off"
         to: "on"
-        id: main_on
+        id: main_member_on
 
       - trigger: state
-        entity_id: light.holiday_main_area
+        entity_id:
+          - light.kitchen_kitchen_left_cabinet_light
+          - light.kitchen_kitchen_right_cabinet_lights
+          - light.living_room_living_room_left_cabinets
+          - light.living_room_living_room_right_cabinet_lights
+          - light.living_room_liquor_cabinet_light
+          - light.living_room_left_ceiling_light
+          - light.living_room_living_room_right_ceiling
         from: "on"
         to: "off"
-        id: main_off
+        id: main_member_off
 
       - trigger: state
         entity_id: light.front_eve_zone
@@ -1291,6 +1430,30 @@ automation:
       #   malformed values
       #   identical timestamps
       - variables:
+          main_area_manual_helper: >-
+            {% set helpers = {
+              'light.kitchen_kitchen_left_cabinet_light':
+                'input_boolean.home_lighting_manual_kitchen_left_cabinet',
+              'light.kitchen_kitchen_right_cabinet_lights':
+                'input_boolean.home_lighting_manual_kitchen_right_cabinet',
+              'light.living_room_living_room_left_cabinets':
+                'input_boolean.home_lighting_manual_living_left_cabinets',
+              'light.living_room_living_room_right_cabinet_lights':
+                'input_boolean.home_lighting_manual_living_right_cabinets',
+              'light.living_room_left_ceiling_light':
+                'input_boolean.home_lighting_manual_living_left_ceiling',
+              'light.living_room_living_room_right_ceiling':
+                'input_boolean.home_lighting_manual_living_right_ceiling',
+              'light.living_room_liquor_cabinet_light':
+                'input_boolean.home_lighting_manual_liquor_cabinet'
+            } %}
+            {{
+              helpers.get(
+                trigger.entity_id if trigger is defined else '',
+                ''
+              )
+            }}
+
           hue_scene_recall_is_newer: >-
             {% set old =
               trigger.from_state.state
@@ -1350,7 +1513,15 @@ automation:
 
               - action: input_boolean.turn_on
                 target:
-                  entity_id: input_boolean.home_lighting_manual_main_area
+                  entity_id:
+                    - input_boolean.home_lighting_manual_kitchen_left_cabinet
+                    - input_boolean.home_lighting_manual_kitchen_right_cabinet
+                    - input_boolean.home_lighting_manual_living_left_cabinets
+                    - input_boolean.home_lighting_manual_living_right_cabinets
+                    - input_boolean.home_lighting_manual_living_left_ceiling
+                    - input_boolean.home_lighting_manual_living_right_ceiling
+                    - input_boolean.home_lighting_manual_liquor_cabinet
+                    - input_boolean.home_lighting_manual_main_area
 
           # ------------------------------------------------------
           # FRONT EVE RAW HUE SCENE RECALL
@@ -1407,49 +1578,94 @@ automation:
                   entity_id: input_boolean.home_lighting_manual_backyard
 
           # ------------------------------------------------------
-          # MAIN AREA ASSERT
+          # MAIN AREA MEMBER ASSERT
           # ------------------------------------------------------
 
           - conditions:
               - condition: trigger
-                id: main_on
+                id: main_member_on
               - condition: state
                 entity_id: input_boolean.home_lighting_ha_guard_main_area
                 state: "off"
               - condition: state
                 entity_id: binary_sensor.hue_bridge_living_room
                 state: "off"
+              - condition: template
+                value_template: "{{ main_area_manual_helper | length > 0 }}"
             sequence:
-              - action: input_text.set_value
+              - action: input_boolean.turn_on
                 target:
-                  entity_id: input_text.home_lighting_manual_main_area_scene_id
-                data:
-                  value: ""
+                  entity_id: "{{ main_area_manual_helper }}"
 
+              # Compatibility aggregate: ON means at least one Main Area
+              # member is under homeowner Manual ownership.
               - action: input_boolean.turn_on
                 target:
                   entity_id: input_boolean.home_lighting_manual_main_area
 
+
           # ------------------------------------------------------
-          # MAIN AREA RELEASE
+          # MAIN AREA MEMBER RELEASE
           # ------------------------------------------------------
 
           - conditions:
               - condition: trigger
-                id: main_off
+                id: main_member_off
               - condition: state
                 entity_id: input_boolean.home_lighting_ha_guard_main_area
                 state: "off"
+              - condition: template
+                value_template: "{{ main_area_manual_helper | length > 0 }}"
             sequence:
               - action: input_boolean.turn_off
                 target:
-                  entity_id: input_boolean.home_lighting_manual_main_area
+                  entity_id: "{{ main_area_manual_helper }}"
 
-              - action: input_text.set_value
-                target:
-                  entity_id: input_text.home_lighting_manual_main_area_scene_id
-                data:
-                  value: ""
+              - if:
+                  - condition: template
+                    value_template: >-
+                      {{
+                        not (
+                          is_state(
+                            'input_boolean.home_lighting_manual_kitchen_left_cabinet',
+                            'on'
+                          )
+                          or is_state(
+                            'input_boolean.home_lighting_manual_kitchen_right_cabinet',
+                            'on'
+                          )
+                          or is_state(
+                            'input_boolean.home_lighting_manual_living_left_cabinets',
+                            'on'
+                          )
+                          or is_state(
+                            'input_boolean.home_lighting_manual_living_right_cabinets',
+                            'on'
+                          )
+                          or is_state(
+                            'input_boolean.home_lighting_manual_living_left_ceiling',
+                            'on'
+                          )
+                          or is_state(
+                            'input_boolean.home_lighting_manual_living_right_ceiling',
+                            'on'
+                          )
+                          or is_state(
+                            'input_boolean.home_lighting_manual_liquor_cabinet',
+                            'on'
+                          )
+                        )
+                      }}
+                then:
+                  - action: input_boolean.turn_off
+                    target:
+                      entity_id: input_boolean.home_lighting_manual_main_area
+
+                  - action: input_text.set_value
+                    target:
+                      entity_id: input_text.home_lighting_manual_main_area_scene_id
+                    data:
+                      value: ""
 
               - delay:
                   seconds: 2
@@ -1913,6 +2129,13 @@ automation:
                 target:
                   entity_id:
                     - input_boolean.home_lighting_manual_main_area
+                    - input_boolean.home_lighting_manual_kitchen_left_cabinet
+                    - input_boolean.home_lighting_manual_kitchen_right_cabinet
+                    - input_boolean.home_lighting_manual_living_left_cabinets
+                    - input_boolean.home_lighting_manual_living_right_cabinets
+                    - input_boolean.home_lighting_manual_living_left_ceiling
+                    - input_boolean.home_lighting_manual_living_right_ceiling
+                    - input_boolean.home_lighting_manual_liquor_cabinet
                     - input_boolean.home_lighting_manual_front_eve
                     - input_boolean.home_lighting_manual_path
                     - input_boolean.home_lighting_manual_backyard

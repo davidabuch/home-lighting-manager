@@ -183,8 +183,10 @@ def test_existing_light_manual_transition_triggers_remain_intact():
         for trigger in detector["triggers"]
     }
 
-    assert triggers["main_on"]["from"] == "off"
-    assert triggers["main_on"]["to"] == "on"
+    assert triggers["main_member_on"]["from"] == "off"
+    assert triggers["main_member_on"]["to"] == "on"
+    assert triggers["main_member_off"]["from"] == "on"
+    assert triggers["main_member_off"]["to"] == "off"
 
     assert triggers["front_eve_on"]["from"] == "off"
     assert triggers["front_eve_on"]["to"] == "on"
@@ -194,3 +196,63 @@ def test_existing_light_manual_transition_triggers_remain_intact():
 
     assert triggers["backyard_on"]["from"] == "off"
     assert triggers["backyard_on"]["to"] == "on"
+
+
+@pytest.mark.asyncio
+async def test_main_area_resolver_reports_entity_level_manual_ownership(rig):
+    """Main Area exposes the exact lights claimed by Manual ownership."""
+
+    left = "light.kitchen_kitchen_left_cabinet_light"
+    right = "light.kitchen_kitchen_right_cabinet_lights"
+    liquor = "light.living_room_liquor_cabinet_light"
+
+    owners = (
+        await rig.run("home_lighting_resolve_owners")
+    ).service_response
+
+    assert owners["main_area"]["manual_entities"] == []
+
+    rig.set(
+        "input_boolean.home_lighting_manual_kitchen_left_cabinet",
+        "on",
+    )
+    owners = (
+        await rig.run("home_lighting_resolve_owners")
+    ).service_response
+
+    assert owners["main_area"]["manual_entities"] == [left]
+
+    rig.set(
+        "input_boolean.home_lighting_manual_kitchen_right_cabinet",
+        "on",
+    )
+    rig.set(
+        "input_boolean.home_lighting_manual_liquor_cabinet",
+        "on",
+    )
+
+    owners = (
+        await rig.run("home_lighting_resolve_owners")
+    ).service_response
+
+    assert owners["main_area"]["manual_entities"] == [
+        left,
+        right,
+        liquor,
+    ]
+
+
+def test_all_main_area_manual_helpers_exist():
+    """Every managed Main Area Hue light has its own Manual helper."""
+
+    expected = {
+        "home_lighting_manual_kitchen_left_cabinet",
+        "home_lighting_manual_kitchen_right_cabinet",
+        "home_lighting_manual_living_left_cabinets",
+        "home_lighting_manual_living_right_cabinets",
+        "home_lighting_manual_living_left_ceiling",
+        "home_lighting_manual_living_right_ceiling",
+        "home_lighting_manual_liquor_cabinet",
+    }
+
+    assert expected.issubset(PACKAGE["input_boolean"])

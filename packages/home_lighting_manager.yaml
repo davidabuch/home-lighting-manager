@@ -1605,7 +1605,13 @@ automation:
 
 
           # ------------------------------------------------------
-          # MAIN AREA MEMBER RELEASE
+          # MAIN AREA MEMBER ASSERT - EXTERNAL OFF
+          #
+          # For per-light Main Area ownership, an externally
+          # initiated ON -> OFF transition is homeowner Manual
+          # intent just like OFF -> ON. It must therefore protect
+          # this exact member rather than relinquish ownership and
+          # immediately restore the automatic baseline.
           # ------------------------------------------------------
 
           - conditions:
@@ -1614,63 +1620,21 @@ automation:
               - condition: state
                 entity_id: input_boolean.home_lighting_ha_guard_main_area
                 state: "off"
+              - condition: state
+                entity_id: binary_sensor.hue_bridge_living_room
+                state: "off"
               - condition: template
                 value_template: "{{ main_area_manual_helper | length > 0 }}"
             sequence:
-              - action: input_boolean.turn_off
+              - action: input_boolean.turn_on
                 target:
                   entity_id: "{{ main_area_manual_helper }}"
 
-              - if:
-                  - condition: template
-                    value_template: >-
-                      {{
-                        not (
-                          is_state(
-                            'input_boolean.home_lighting_manual_kitchen_left_cabinet',
-                            'on'
-                          )
-                          or is_state(
-                            'input_boolean.home_lighting_manual_kitchen_right_cabinet',
-                            'on'
-                          )
-                          or is_state(
-                            'input_boolean.home_lighting_manual_living_left_cabinets',
-                            'on'
-                          )
-                          or is_state(
-                            'input_boolean.home_lighting_manual_living_right_cabinets',
-                            'on'
-                          )
-                          or is_state(
-                            'input_boolean.home_lighting_manual_living_left_ceiling',
-                            'on'
-                          )
-                          or is_state(
-                            'input_boolean.home_lighting_manual_living_right_ceiling',
-                            'on'
-                          )
-                          or is_state(
-                            'input_boolean.home_lighting_manual_liquor_cabinet',
-                            'on'
-                          )
-                        )
-                      }}
-                then:
-                  - action: input_boolean.turn_off
-                    target:
-                      entity_id: input_boolean.home_lighting_manual_main_area
-
-                  - action: input_text.set_value
-                    target:
-                      entity_id: input_text.home_lighting_manual_main_area_scene_id
-                    data:
-                      value: ""
-
-              - delay:
-                  seconds: 2
-
-              - action: script.home_lighting_evaluate_and_apply
+              # Compatibility aggregate: ON means at least one Main Area
+              # member is under homeowner Manual ownership.
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.home_lighting_manual_main_area
 
 
           # ------------------------------------------------------

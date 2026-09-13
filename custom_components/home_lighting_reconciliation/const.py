@@ -19,6 +19,13 @@ EVALUATORS = {
 CONTROL = {
     *(f"input_boolean.home_lighting_{s}_window" for s in SURFACES),
     *(f"input_boolean.home_lighting_manual_{s}" for s in SURFACES),
+    "input_boolean.home_lighting_manual_kitchen_left_cabinet",
+    "input_boolean.home_lighting_manual_kitchen_right_cabinet",
+    "input_boolean.home_lighting_manual_living_left_cabinets",
+    "input_boolean.home_lighting_manual_living_right_cabinets",
+    "input_boolean.home_lighting_manual_living_left_ceiling",
+    "input_boolean.home_lighting_manual_living_right_ceiling",
+    "input_boolean.home_lighting_manual_liquor_cabinet",
     "input_boolean.home_lighting_holiday_active",
     "input_text.home_lighting_holiday_key",
     "input_boolean.spa_gauge_active",

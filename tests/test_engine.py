@@ -25,7 +25,16 @@ def world():
             if service == "scene.turn_on":
                 group = [f"light.{surface}_{i}" for i in range(3)]
                 members[surface] += group
-                scenes[entity] = {"actions": dict.fromkeys(group, True), "latest": True}
+                scenes[entity] = {
+                    "actions": {
+                        member: {
+                            "rid": member,
+                            "action": {"on": {"on": True}},
+                        }
+                        for member in group
+                    },
+                    "latest": True,
+                }
                 states.update(
                     {
                         e: {
@@ -63,7 +72,13 @@ def test_liquor_white_correct_under_every_lower_owner(owner):
     if owner in ("holiday", "49ers"):
         owners["main_area"]["scene"] = "scene.example"
         scenes["scene.example"] = {
-            "actions": dict.fromkeys(members["main_area"], True),
+            "actions": {
+                member: {
+                    "rid": member,
+                    "action": {"on": {"on": True}},
+                }
+                for member in members["main_area"]
+            },
             "latest": True,
         }
     states[LIQUOR] = {"state": "on", "attributes": {"brightness": 255, "color_temp_kelvin": 4000}}
@@ -140,3 +155,136 @@ async def test_baseline_reader_accepts_ha_validated_configuration(rig):
         deepcopy(PACKAGE["script"]["home_lighting_apply_main_area_baseline"])
     )
     assert len(commands_in(obj["sequence"])) == 7
+
+
+def test_reconciliation_skips_only_manual_main_area_member():
+    """Per-light Manual protects one member without disabling Main Area repair."""
+
+    args = world()
+
+    protected = "light.kitchen_kitchen_left_cabinet_light"
+    repairable = "light.kitchen_kitchen_right_cabinet_lights"
+
+    args[0]["main_area"]["manual_entities"] = [protected]
+
+    args[1][protected]["state"] = "off"
+    args[1][repairable]["state"] = "off"
+
+    result = verify(*args)
+
+    assert all(c.entity != protected for c in result.commands)
+    assert any(c.entity == repairable for c in result.commands)
+
+
+def test_reconciliation_off_preserves_manual_main_area_member():
+    """Automatic Off may not turn off a per-light Manual exception."""
+
+    args = world()
+
+    protected = "light.kitchen_kitchen_left_cabinet_light"
+
+    args[0]["main_area"]["owner"] = "off"
+    args[0]["main_area"]["manual_entities"] = [protected]
+
+    result = verify(*args)
+
+    assert all(c.entity != protected for c in result.commands)
+    assert any(
+        c.surface == "main_area"
+        and c.service == "light.turn_off"
+        for c in result.commands
+    )
+
+
+def test_scene_owner_with_manual_member_generates_selective_scene_command():
+    """Holiday/49ers repair protects Manual members but repairs the remainder."""
+
+    args = world()
+
+    protected = args[3]["main_area"][0]
+    scene = "scene.example"
+
+    args[0]["main_area"]["owner"] = "holiday"
+    args[0]["main_area"]["scene"] = scene
+    args[0]["main_area"]["manual_entities"] = [protected]
+
+    members = args[3]["main_area"]
+
+    args[4][scene] = {
+        "actions": {
+            entity: {
+                "rid": entity,
+                "action": {"on": {"on": True}},
+            }
+            for entity in members
+        },
+        "latest": True,
+    }
+
+    for entity in members:
+        args[1][entity] = {
+            "state": "off",
+            "attributes": {},
+        }
+
+    result = verify(*args)
+
+    selective = [
+        command
+        for command in result.commands
+        if command.service == "hue.apply_scene_actions"
+    ]
+
+    assert len(selective) == 1
+    assert selective[0].surface == "main_area"
+    assert selective[0].entity == scene
+    assert selective[0].data == {"protected": [protected]}
+
+
+def test_scene_verification_ignores_manual_member_drift():
+    """A protected Manual member must not make an otherwise-correct scene drift."""
+
+    args = world()
+
+    protected = args[3]["main_area"][0]
+    scene = "scene.example"
+
+    args[0]["main_area"]["owner"] = "49ers"
+    args[0]["main_area"]["scene"] = scene
+    args[0]["main_area"]["manual_entities"] = [protected]
+
+    members = args[3]["main_area"]
+
+    args[4][scene] = {
+        "actions": {
+            entity: {
+                "rid": entity,
+                "action": {"on": {"on": True}},
+            }
+            for entity in members
+        },
+        "latest": True,
+    }
+
+    for entity in members:
+        args[1][entity] = {
+            "state": "on",
+            "attributes": {},
+        }
+
+    # Manual member intentionally disagrees with the automatic scene.
+    args[1][protected] = {
+        "state": "off",
+        "attributes": {},
+    }
+
+    result = verify(*args)
+
+    assert all(
+        command.service != "hue.apply_scene_actions"
+        for command in result.commands
+    )
+    assert all(
+        issue.get("entity") != protected
+        for issue in result.issues
+    )

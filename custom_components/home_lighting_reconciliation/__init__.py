@@ -192,6 +192,21 @@ class Adapter:
         final = verify(current, states, scripts, members, metadata, self.suppression())
         if command not in final.commands:
             return False
+        if command.service == "hue.apply_scene_actions":
+            scene_info = metadata.get(command.entity)
+            if not scene_info:
+                return False
+
+            try:
+                await self.hue.apply_actions(
+                    scene_info,
+                    protected=command.data.get("protected", ()),
+                )
+            except ValueError:
+                return False
+
+            return True
+
         domain, service = command.service.split(".")
         await self.hass.services.async_call(
             domain,

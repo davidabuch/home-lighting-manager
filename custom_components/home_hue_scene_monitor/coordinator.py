@@ -6,7 +6,6 @@ import logging
 from typing import Any
 
 import aiohttp
-
 from homeassistant.const import CONF_API_KEY, CONF_HOST
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession

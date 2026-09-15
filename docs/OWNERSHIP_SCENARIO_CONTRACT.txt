@@ -1,0 +1,1045 @@
+HOME LIGHTING MANAGER
+OWNERSHIP / SCENARIO CONTRACT AND NEW-CHAT HANDOFF
+======================================================================
+
+Purpose
+-------
+This file is intended to be placed in ChatGPT Project Sources for the
+Home Lighting Manager project. It captures the ownership concepts,
+scenario decisions, edge-case rules, and implementation direction that
+were worked through interactively.
+
+Treat this document as the behavioral contract for future development.
+
+If an older conversational summary, README statement, helper comment,
+or current implementation conflicts with this document, this document
+should be treated as the intended future behavior unless the user later
+explicitly changes it.
+
+This file is deliberately more detailed than a normal handoff because
+the original chat became very large and the goal is to continue in a
+new chat without re-deriving the behavioral design.
+
+Repository
+----------
+GitHub:
+  davidabuch/home-lighting-manager
+
+Repo location on user's Mac:
+  ~/Documents/GitHub/home-lighting-manager
+
+Known merged main state at the time this contract was frozen:
+  main commit:
+  7f4707714bb69058ce824bc4a06343595c5a5aea
+
+Important recent merged work:
+  PR #5:
+    Add per-light Main Area manual ownership
+  PR #6:
+    Treat Main Area manual OFF as homeowner intent
+
+Current Home Assistant version during commissioning:
+  2026.9.2
+
+Current project direction:
+  The existing YAML/helper-based ownership system is no longer
+  sufficient for the desired behavior. Future work should move toward
+  a true ownership-layer/session state machine, preferably as one
+  HACS-managed Home Assistant custom integration.
+
+======================================================================
+SECTION 1 - FOUNDATIONAL PRINCIPLES
+======================================================================
+
+1. HOMEOWNER INTENT SHOULD WIN WHEN IT IS HIGH-CONFIDENCE
+
+A deliberate homeowner command through Home Assistant, HomeKit/Siri,
+Hue, or another trusted UI should be respected.
+
+Examples:
+- selecting a scene
+- selecting a color
+- changing brightness
+- explicitly turning a managed light ON
+- explicitly turning a managed light OFF
+- issuing a group or zone command
+
+High-confidence homeowner intent should create or modify Manual
+ownership for the exact light/group that was commanded.
+
+However, system telemetry, recovery events, stale state, bridge
+reconnects, unknown/unavailable transitions, and other ambiguous
+events are NOT homeowner intent.
+
+
+2. AMBIGUITY DEFAULTS TO HLM / HA OWNERSHIP
+
+This is a core decision.
+
+If ownership becomes ambiguous because of:
+- long outage
+- restart
+- stale state
+- conflicting evidence
+- integration recovery
+- edge case not yet anticipated
+- incomplete Manual desired-state reconstruction
+
+then the default should be:
+  HLM / Home Assistant ownership
+
+Reason:
+It is preferable for HLM to restore the legitimate automatic state and
+let the homeowner re-assert a preference than to invent or preserve an
+uncertain Manual state.
+
+
+3. OWNERSHIP IS LAYERED, NOT JUST A STATIC PRIORITY TABLE
+
+The most important architectural principle from the scenario review:
+
+  Lighting ownership is a stack of layers.
+
+A layer can be:
+- Daily automatic lighting
+- Holiday lighting
+- Hue Sync
+- 49ers lighting
+- Spa Gauge
+- Manual homeowner appearance
+- Manual-OFF
+- liquor-cabinet door-open bright-white functional lighting
+- short-lived scoring/temperature/alert effects
+
+The visible state is determined by the currently exposed top valid
+layer.
+
+Some automatic functions are allowed to push new layers automatically.
+A later explicit homeowner action can often push a Manual layer above
+them.
+
+Therefore:
+  priority determines which automatic/system owners are allowed to push
+  layers,
+while:
+  recency and explicit homeowner intent determine which eligible layer
+  is currently exposed.
+
+
+4. OFF IS PRIMARILY A "PEEL ONE LAYER" COMMAND
+
+OFF is not always equivalent to "keep the bulb physically off forever."
+
+The key model is:
+  OFF removes the currently exposed removable ownership layer and
+  reveals the next valid layer underneath.
+
+Repeated OFF commands can therefore peel through multiple layers.
+
+Example after sunset:
+  Evening automatic
+    -> Spa Gauge
+      -> Manual white
+
+First OFF:
+  removes Manual white
+  reveals Spa Gauge
+
+Second OFF:
+  removes/dismisses Spa Gauge for that session
+  reveals Evening automatic
+
+Third OFF:
+  removes/suppresses the evening automatic layer for this lighting
+  scope
+  result = lights remain OFF until a new valid automation/manual event
+
+
+5. AUTOMATION FAMILY VS CHILD EFFECT
+
+Some automations have a parent behavior plus child effects.
+
+49ers family:
+- parent = 49ers game lighting
+- child = scoring flash
+- child = periodic 49ers reassertion
+
+Spa Gauge family:
+- parent = temperature gauge
+- child = heater/pulse behavior
+- child = target-temperature blink
+
+If the homeowner explicitly overrides or dismisses the parent during an
+active session, the ENTIRE FAMILY is suppressed for the remainder of
+that session.
+
+A child effect must never resurrect a homeowner-suppressed parent.
+
+
+6. CURRENT-TIME TRUTH BEATS MISSED HISTORICAL EVENTS
+
+After:
+- Home Assistant restart
+- Hue Bridge outage
+- integration reload
+- long downtime
+
+HLM should determine what should be true NOW.
+
+It should not blindly replay every missed sunset, holiday, 01:59,
+score, temperature, or other event that occurred while offline.
+
+
+7. UNAVAILABLE IS NOT OFF
+
+Unknown/unavailable Hue devices are not equivalent to OFF.
+
+Unavailable devices:
+- should not accidentally create Manual ownership
+- should not be interpreted as homeowner OFF
+- should not have missed commands queued for later automatic replay
+
+When they recover, HLM resolves current ownership and converges toward
+the correct state at that time.
+
+
+======================================================================
+SECTION 2 - ORDINARY MANUAL OWNERSHIP
+======================================================================
+
+Manual ownership should be per-light whenever possible.
+
+Main Area currently contains per-light helpers for:
+- Kitchen Left Cabinet
+- Kitchen Right Cabinet
+- Living Room Left Cabinets
+- Living Room Right Cabinets
+- Living Room Left Ceiling
+- Living Room Right Ceiling
+- Liquor Cabinet
+
+The aggregate Main Area helper may remain as a compatibility/summary
+indicator, but the behavioral truth should be per-entity.
+
+A homeowner command should claim only the members actually commanded,
+unless the homeowner explicitly commanded a whole group/zone.
+
+Manual state should store enough desired-state information to restore
+the intended appearance when appropriate:
+- on/off
+- brightness
+- color temperature
+- xy/rgb/hs color as applicable
+- effect
+- Hue scene identity when a scene was selected
+
+A boolean "Manual = on" is not enough for the final architecture.
+
+
+======================================================================
+SECTION 3 - SINGLE LIGHT OFF / DOUBLE-OFF SEMANTICS
+======================================================================
+
+CASE A: automatic light is ON and homeowner turns it OFF
+--------------------------------------------------------
+The OFF itself is homeowner intent.
+
+The light should become Manual-OFF and remain OFF until the next
+meaningful ownership transition defined by the rules below.
+
+The system must not immediately "repair" the light back ON merely
+because Daily/Holiday is active.
+
+
+CASE B: homeowner Manual appearance is active and homeowner turns OFF
+---------------------------------------------------------------------
+The first OFF releases the current Manual appearance layer back to HLM.
+
+HLM then determines the correct underlying automatic state.
+
+If after sunset, this may cause the light to come back ON in:
+- Daily
+- Holiday
+- another valid automatic owner
+
+If the homeowner then turns the light OFF again:
+  that second OFF means "No, I really want it OFF."
+  It creates Manual-OFF.
+
+This is the general double-OFF behavior.
+
+
+CASE C: Manual-OFF lifetime
+---------------------------
+Manual-OFF should not mean "forever."
+
+Ordinary Manual / Manual-OFF is evening-cycle scoped.
+
+The next meaningful automation boundary may reclaim control.
+
+Typical examples:
+- next sunset / next evening lighting activation
+- 01:59 nightly shutdown/reset
+- explicit homeowner ON/scene/color command
+- start/end of an automatic session where defined
+
+
+======================================================================
+SECTION 4 - GROUP OFF SEMANTICS
+======================================================================
+
+A mixed-ownership group may contain:
+- some Manual appearance members
+- some Manual-OFF members
+- some Daily members
+- some Holiday members
+- some functional layers
+
+Agreed group behavior:
+
+FIRST GROUP OFF:
+  release homeowner exceptions across the commanded group
+  return all members of that requested group to HLM ownership
+  HLM immediately computes the currently appropriate automatic state
+
+SECOND GROUP OFF:
+  explicit group Manual-OFF
+  the whole requested group remains OFF
+
+Core phrase:
+  First group OFF = release the group to HLM
+  Second group OFF = keep the group OFF
+
+
+======================================================================
+SECTION 5 - DAYTIME MANUAL -> SUNSET
+======================================================================
+
+If a homeowner deliberately turns on a light/scene/color during the
+day, sunset should NOT automatically overwrite that valid Manual
+appearance.
+
+Example:
+- noon: liquor cabinet manually selected purple
+- sunset arrives
+- purple remains because Manual ownership is still valid
+
+To end the Manual choice after sunset:
+- first OFF releases Manual to HLM
+- HLM applies the appropriate evening state
+- second OFF means the homeowner wants the light OFF despite the
+  evening automatic state
+
+
+======================================================================
+SECTION 6 - 01:59 NIGHTLY BOUNDARY
+======================================================================
+
+At 01:59:
+- ordinary Manual appearance expires
+- ordinary Manual-OFF expires
+- evening lighting windows end
+- HLM performs the normal nightly shutdown/reconciliation
+
+If HA is offline at 01:59:
+- startup reconciliation must infer that the boundary passed
+- stale ordinary Manual ownership must not survive into the next day
+
+Important exception:
+- liquor-cabinet repair override described later does NOT clear merely
+  because 01:59 occurred
+
+
+======================================================================
+SECTION 7 - HOLIDAY OWNERSHIP
+======================================================================
+
+Holiday lighting is an automatic layer.
+
+Valid Manual appearance can remain above Holiday.
+
+Releasing Manual reveals Holiday when Holiday is the appropriate
+automatic owner.
+
+An additional OFF can create Manual-OFF.
+
+If Manual applies only to some members of a surface:
+- Holiday should be applied only to the automatic members
+- protected Manual members must not flash/change first and then be
+  restored
+- selective Hue scene action application is required
+
+
+======================================================================
+SECTION 8 - HUE SYNC
+======================================================================
+
+Hue Sync can structurally supersede an existing layer when it starts.
+
+Example:
+  Manual -> Hue Sync
+
+Underlying Manual state remains preserved where valid.
+
+When Hue Sync ends:
+  expose the next valid underlying layer
+
+If the underlying Manual layer expired during Sync because 01:59
+passed, it must not reappear later.
+
+Raw state churn caused by Sync itself must never be interpreted as
+Manual homeowner intent.
+
+
+======================================================================
+SECTION 9 - 49ERS AUTOMATION FAMILY
+======================================================================
+
+49ers is a session-based automation family.
+
+PARENT:
+- 49ers red/gold game lighting
+
+CHILDREN:
+- scoring flashes
+- periodic/reassert behavior
+- any future 49ers-specific lighting effect
+
+When the 49ers game goes live, 49ers may push above the current
+underlying state.
+
+If the homeowner explicitly changes the participating lighting while
+49ers is active, that means:
+  "I do not want the 49ers lighting automation for the remainder of
+   this game session."
+
+Then:
+- suppress entire 49ers family for that game
+- suppress normal game scene
+- suppress scoring flashes
+- suppress periodic reassert
+- suppress future 49ers child effects
+
+If Manual later releases:
+  reveal the underlying non-49ers layer
+  DO NOT restore 49ers during the same game
+
+Suppression ends when that game session ends.
+
+The next game starts eligible again.
+
+If 49ers is not suppressed, score flashing is a temporary child
+overlay. If 49ers is suppressed, a score must never resurrect it.
+
+
+======================================================================
+SECTION 10 - SPA GAUGE AUTOMATION FAMILY
+======================================================================
+
+Spa Gauge is a session-based automation family.
+
+PARENT:
+- temperature gauge
+
+CHILDREN:
+- heater/pulsing behavior
+- target-temperature achieved blink
+- future gauge-specific effects
+
+If Spa Gauge starts after an existing Manual selection:
+  underlying Manual may remain beneath the gauge.
+
+If the homeowner changes Spa lighting while Spa Gauge is active:
+- chooses white
+- chooses another color
+- recalls a scene
+- changes brightness
+- deliberately turns the Spa lighting OFF
+
+then the homeowner is dismissing Spa Gauge for the current spa session.
+
+Result:
+- suppress entire Spa Gauge family for that session
+- no more gauge color updates
+- no heater pulses
+- no target-temperature blink
+- no later gauge reassertion
+
+When the Spa session ends:
+- clear suppression
+- next independent Spa session is eligible again
+
+
+======================================================================
+SECTION 11 - LIQUOR CABINET NORMAL DOOR BEHAVIOR
+======================================================================
+
+Either cabinet door open:
+- liquor cabinet lighting becomes bright functional white
+- intended target:
+    brightness 255
+    color temperature 4000 K
+
+Underlying state must be preserved.
+
+When final door closes:
+- return to correct underlying owner/state
+- if underlying state was a Hue dynamic Manual scene, rejoin that
+  actual Hue scene rather than restoring only a sampled static color
+
+
+======================================================================
+SECTION 12 - LIQUOR CABINET DOOR-SENSOR REPAIR OVERRIDE
+======================================================================
+
+If a door sensor fails/sticks "open":
+
+FIRST OFF while door reports open:
+- note homeowner intent
+- do not yet extinguish forced-white light
+
+SECOND OFF, with no intervening liquor-cabinet door-state change:
+- activate persistent repair override
+- turn liquor cabinet light OFF
+- suppress forced-white door behavior
+
+This override must NOT clear automatically at 01:59.
+
+It clears only after meaningful homeowner evidence:
+- either liquor-cabinet door changes state
+- OR homeowner manually turns liquor-cabinet light ON
+
+Then normal HLM door behavior resumes.
+
+
+======================================================================
+SECTION 13 - HUE BRIDGE OUTAGE
+======================================================================
+
+Known real event:
+Hue Bridge lost power roughly 11 PM to 5 AM during this project.
+
+Rules:
+1. Bridge outage is not Manual intent.
+2. Commands attempted while Hue is unavailable should fail without
+   creating ownership changes.
+3. Failed commands are not queued for future replay.
+4. If ownership becomes ambiguous, default to HLM ownership.
+5. If outage spans 01:59, ordinary Manual state still logically expires.
+6. If outage spans sunset, on recovery compute current rightful state.
+7. Recovery telemetry is never homeowner intent.
+8. Reconciliation converges to current authoritative ownership.
+
+
+======================================================================
+SECTION 14 - HOME ASSISTANT RESTART / RELOAD
+======================================================================
+
+Restart/reload is not homeowner intent.
+
+Valid Manual ownership can survive restart only if:
+- still temporally/session valid
+- desired state is trustworthy
+- ownership evidence remains coherent
+
+If HA was offline across a boundary:
+- reconstruct boundary from current time
+- do not preserve stale Manual simply because helpers restored
+
+Plans computed under an old config generation should not execute after
+reload without re-resolution.
+
+
+======================================================================
+SECTION 15 - UNAVAILABLE MEMBERS IN GROUP COMMANDS
+======================================================================
+
+If a group command includes unavailable lights:
+- available members respond normally
+- unavailable members do not gain fake Manual ownership
+- command is not queued for unavailable member
+- on recovery, HLM computes current rightful state
+
+
+======================================================================
+SECTION 16 - NEAR-SIMULTANEOUS HOMEOWNER COMMANDS
+======================================================================
+
+If two valid explicit homeowner commands arrive close together:
+  newest successfully executed homeowner intent wins.
+
+Late telemetry from the earlier command must not restore stale state.
+
+
+======================================================================
+SECTION 17 - TEMPORARY ALERT / OVERLAY MODEL
+======================================================================
+
+Examples:
+- 49ers score flash
+- Spa target-temp blink
+- pool-ready notification
+- Powerwall/grid alert
+
+Temporary overlay should:
+- preserve underlying stack
+- display for allowed duration
+- disappear
+- expose previous valid layer
+
+If parent family is session-suppressed:
+- its child overlays are ineligible
+
+
+======================================================================
+SECTION 18 - MIXED OWNERSHIP AND SELECTIVE REPAIR
+======================================================================
+
+A surface can contain Manual and automatic members simultaneously.
+
+Requirements:
+- evaluator does not overwrite Manual members
+- automatic scene repair applies only to automatic members
+- no whole-zone recall that briefly changes protected lights
+- releasing one Manual member lets that member join current automatic
+  presentation
+- unrelated Manual members remain untouched
+
+Hue V2 action-level scene information is valuable and should be
+retained.
+
+
+======================================================================
+SECTION 19 - RECONCILIATION PRINCIPLES
+======================================================================
+
+Reconciliation enforces resolved ownership.
+
+It should not create Manual ownership merely because it observes drift.
+
+Automatic drift:
+- repair when HLM owns target
+
+Manual-owned target:
+- do not repair toward automatic state
+
+Unavailable:
+- do not treat as OFF
+
+Ambiguous:
+- re-resolve using HLM as default authority
+
+Repairs should:
+- verify current generation/session before dispatch
+- use HA attribution guards
+- avoid fighting active protected owners
+- support selective per-member repair
+- remain bounded
+- cancel/recompute when newer intent arrives
+
+
+======================================================================
+SECTION 20 - HOMEKIT / SIRI ROOM COMMAND ISSUE
+======================================================================
+
+Observed:
+User says "turn off kitchen lights":
+- only intended Lutron Main ceiling lights respond
+
+User's wife says same command:
+- all Kitchen-associated lights, including Hue cabinet lights, may
+  respond
+
+Same concern may exist in other rooms.
+
+Desired:
+- consistent room-level Siri behavior between household members
+- room commands should not unintentionally include HLM Hue accents
+
+Likely separate Apple Home / HomeKit room/accessory audit.
+
+HLM should react correctly to commands it actually receives but should
+not guess around incorrect Apple Home room membership.
+
+
+======================================================================
+SECTION 21 - SPECIFIC NUMBERED SCENARIO DECISIONS
+======================================================================
+
+The interactive review reached 90 scenarios.
+
+The approved behavioral decisions are incorporated normatively
+throughout this document.
+
+Specific numbered decisions explicitly highlighted during review:
+
+SCENARIO 1
+Ordinary Manual state does not remain forever; it clears at the next
+valid automation lifecycle boundary, including the nightly boundary.
+
+SCENARIO 2
+Manual-OFF also does not remain forever; it lasts only until the next
+valid automation/manual ownership transition.
+
+SCENARIO 5
+Individual double-OFF:
+- first OFF releases Manual appearance to HLM
+- HLM may reapply automatic evening state
+- second OFF creates explicit Manual-OFF
+
+SCENARIO 15
+Holiday and normal evening lighting are automatic layers. Manual state
+is not automatically destroyed merely because Holiday becomes eligible.
+
+SCENARIO 21
+Whole Main Area Manual scene/color selected during day remains Manual
+through sunset. OFF releases to HLM; another OFF creates explicit OFF.
+
+SCENARIO 25
+Siri room-command inconsistency between household members should be
+fixed separately.
+
+SCENARIO 28
+If Holiday is underlying owner and homeowner releases Manual, HLM
+applies Holiday; another OFF creates Manual-OFF.
+
+SCENARIO 38
+Commands attempted while Hue Bridge is down should effectively be
+treated as failed/non-events and must not create Manual ownership.
+
+OVERALL PRINCIPLE AROUND SCENARIO 38
+Ambiguous ownership defaults to HLM ownership.
+
+SCENARIO 55
+49ers takes control over prior Manual state when the game session
+begins, subject to the later family/session suppression rules.
+
+SCENARIO 56
+Same preservation/supersession concept as 55 for related 49ers
+transitions.
+
+SCENARIO 59
+Final Spa behavior is governed by the layered/session-suppression model:
+later homeowner override suppresses Spa Gauge family for current session.
+
+SCENARIO 60
+Keep aligned with Scenario 59.
+
+SCENARIO 76
+Mixed ownership + group OFF:
+- first group OFF returns commanded group to HLM
+- second group OFF keeps group OFF
+
+SCENARIO 81
+Unavailable member:
+- available members act
+- unavailable member gains no fake ownership
+- no delayed replay on recovery
+
+SCENARIO 82
+Two valid homeowner commands:
+- last successful command wins
+
+SCENARIO 83
+Major layer-stack insight:
+OFF peels one layer.
+
+Example:
+  Evening -> Spa Gauge -> Manual white
+OFF #1 -> Spa Gauge
+OFF #2 -> Evening
+OFF #3 -> OFF
+
+SCENARIO 84
+Long HA outage across schedule boundaries:
+- current-time truth wins
+- stale ordinary Manual state should not survive
+
+SCENARIO 85
+If desired Manual appearance cannot be reconstructed confidently:
+- relinquish questionable Manual state
+- default to HLM
+
+SCENARIO 86
+Manual override during active 49ers suppresses entire 49ers family for
+remainder of that game.
+
+SCENARIO 87
+After 49ers suppression, releasing later Manual reveals underlying
+non-49ers state; 49ers does not reappear during same game.
+
+SCENARIO 88
+Manual override during active Spa Gauge suppresses entire Spa Gauge
+family for that session.
+
+SCENARIO 89
+Deliberate OFF while a special parent automation is active dismisses
+that automation family for the current session and exposes underlying
+state.
+
+SCENARIO 90
+Child effect can never resurrect suppressed parent:
+- suppressed 49ers -> score cannot flash
+- suppressed Spa Gauge -> target temp cannot blink
+
+
+======================================================================
+SECTION 22 - CURRENT IMPLEMENTATION VS DESIRED CONTRACT
+======================================================================
+
+Current repo architecture:
+- large Home Assistant YAML package
+- helper booleans for Manual ownership
+- resolver returning one surface-level owner
+- separate 49ers automation
+- separate Spa Gauge automations
+- separate Hue scene monitor custom integration
+- separate reconciliation custom integration
+
+Current shortcomings:
+- static priority instead of true layer stack
+- booleans insufficient for Manual desired state
+- inconsistent OFF semantics across surfaces
+- no general first-OFF / second-OFF state machine
+- no session suppression for 49ers
+- no session suppression for Spa Gauge
+- no parent/child automation-family abstraction
+- no persistent liquor door repair override
+- restart logic can confuse physical OFF with stale Manual
+- reconciler receives one surface owner instead of effective per-entity
+  layered state
+- current 49ers reassert can fight homeowner intent
+- current scoring flash does not know parent was dismissed
+- current Spa target blink does not know family was dismissed
+
+Useful concepts/code to preserve:
+- Hue V2 scene/action evidence
+- per-member Main Area protection
+- HA command attribution guards
+- bounded reconciliation
+- semantic scene verification
+- startup/current-time window reconstruction
+- Home Holiday Calendar integration
+
+
+======================================================================
+SECTION 23 - HACS / ARCHITECTURAL DIRECTION
+======================================================================
+
+User wants future updates through HACS.
+
+Desired end state:
+  one HACS-managed integration:
+    custom_components/home_lighting_manager/
+
+Likely responsibilities:
+- ownership layer state machine
+- per-entity desired state
+- session IDs
+- automation-family suppression state
+- OFF/pop semantics
+- group OFF semantics
+- Manual-OFF
+- Hue scene evidence/monitoring
+- reconciliation
+- HA event listeners
+- persistence/restart reconstruction
+- health sensors
+- services/debugging
+
+Home Hue Scene Monitor capability can likely become an internal HLM
+module instead of a separate HACS integration.
+
+Tightly coupled behaviors should progressively move into HLM:
+- 49ers family orchestration
+- Spa Gauge family orchestration
+- liquor cabinet functional override
+- ownership decisions
+- reconciliation
+
+
+======================================================================
+SECTION 24 - DEVELOPMENT WORKFLOW
+======================================================================
+
+1. GitHub is source of truth.
+2. Review current main before proposing work.
+3. Use feature branch.
+4. Keep changes narrowly scoped.
+5. Add tests first or alongside behavior.
+6. Run:
+   - config/YAML parsing as applicable
+   - targeted tests
+   - full test suite
+   - ruff
+   - diff check
+7. Do not stage/commit/push/deploy without explicit user direction.
+8. Use PRs for review.
+9. Merge only after CI is green.
+10. Deploy exact merged commit/release.
+11. Commission deliberately in Home Assistant.
+12. HACS should become normal production update mechanism after
+    architecture conversion.
+
+
+======================================================================
+SECTION 25 - RECOMMENDED IMPLEMENTATION SEQUENCE
+======================================================================
+
+PHASE 1 - CONTRACT / TEST FOUNDATION
+- add this contract to repo
+- convert scenarios into acceptance tests / matrix
+
+PHASE 2 - STATE MODEL
+Introduce:
+- ownership layers
+- per-entity desired Manual state
+- Manual-OFF
+- group operation history
+- automation-family session IDs
+- family suppression
+- child-effect eligibility
+- config generation / stale-work invalidation
+
+PHASE 3 - OFF ENGINE
+Implement:
+- individual first/second OFF
+- group first/second OFF
+- layer pop
+- Manual-OFF
+- automatic exposure underneath
+
+PHASE 4 - AUTOMATION FAMILIES
+Convert:
+- 49ers parent + score children
+- Spa Gauge parent + target/pulse children
+
+PHASE 5 - LIQUOR CABINET
+Implement:
+- door functional layer
+- persistent two-OFF repair override
+- meaningful-event clearance
+
+PHASE 6 - RECONCILIATION
+Adapt current reconciler to:
+- effective per-entity layer
+- layered desired state
+- protected members
+- session suppression
+- stale generation cancellation
+
+PHASE 7 - OUTAGE / RESTART
+Test:
+- Hue Bridge outage
+- HA restart
+- missed sunset
+- missed 01:59
+- integration reload
+- unavailable recovery
+- stale event rejection
+
+PHASE 8 - HACS
+Package one coherent Home Lighting Manager custom integration.
+
+PHASE 9 - APPLE HOME / SIRI
+Separately audit room membership and household-member command behavior.
+
+
+======================================================================
+SECTION 26 - CURRENT COMMISSIONING KNOWLEDGE
+======================================================================
+
+Known commissioned behavior before final architecture redesign:
+
+- PR #6 deployed successfully
+- HA core checks passed
+- post-restart reconciliation became healthy
+- Daily baseline successfully established
+- per-light external OFF successfully claimed Manual ownership
+- two independent Kitchen Manual members successfully preserved
+- external OFF->ON preserved Manual ownership
+- automatic drift repair repaired an unowned Living Room Right Cabinet
+  light while preserving Manual members
+- reconciliation health showed successful selective repair
+
+Holiday selective-scene commissioning exposed an important problem:
+- whole Holiday scene recall changed Manual-protected Main Area members
+  despite them logically remaining Manual
+- this confirmed need for true selective scene action execution and
+  helped trigger the scenario-contract redesign
+
+
+======================================================================
+SECTION 27 - IMPORTANT ENTITY / SURFACE CONTEXT
+======================================================================
+
+Main Area key lights:
+- light.kitchen_kitchen_left_cabinet_light
+- light.kitchen_kitchen_right_cabinet_lights
+- light.living_room_living_room_left_cabinets
+- light.living_room_living_room_right_cabinet_lights
+- light.living_room_left_ceiling_light
+- light.living_room_living_room_right_ceiling
+- light.living_room_liquor_cabinet_light
+
+Front Eve:
+- light.front_yard_front_eve_lights
+- light.front_eve_zone
+
+Path:
+- light.holiday_path
+
+Backyard:
+- light.holiday_backyard
+- light.backyard_spa_strip_lights
+
+Liquor cabinet doors:
+- binary_sensor.liquor_cabinet_door_r
+- binary_sensor.liquor_cabinet_l_door
+
+Hue Sync:
+- binary_sensor.hue_bridge_living_room
+- binary_sensor.hue_bridge_backyard
+
+49ers:
+- sensor.nfl_san_francisco_49ers
+
+Spa Gauge:
+- input_boolean.spa_gauge_active
+- input_boolean.spa_gauge_blinked
+
+Reconciliation:
+- sensor.home_lighting_reconciliation_health
+
+Raw Hue recall sensors:
+- sensor.main_area_last_recall
+- sensor.front_eve_last_recall
+- sensor.path_last_recall
+- sensor.backyard_last_recall
+
+
+======================================================================
+SECTION 28 - NEW CHAT STARTING INSTRUCTIONS
+======================================================================
+
+When this file is loaded into a new chat:
+
+1. Treat it as the behavioral contract and project handoff.
+2. Review current GitHub repo independently before coding.
+3. Do not assume current main still equals the commit listed above.
+4. Compare current repo behavior to this contract.
+5. Do not regress already commissioned behavior.
+6. Prefer architecture over accumulating one-off YAML exceptions.
+7. Preserve high-confidence homeowner intent.
+8. Default ambiguity to HLM ownership.
+9. Treat OFF as a layer-pop/release mechanism.
+10. Treat 49ers and Spa Gauge as session-based automation families.
+11. Never allow child effects to resurrect a suppressed parent.
+12. Keep future deployment HACS-oriented.
+13. Keep Siri/HomeKit room-membership issue separate unless evidence
+    proves a direct link.
+14. Use GitHub/CI/PR workflow and commission deliberately in HA.
+
+======================================================================
+END OF CONTRACT
+======================================================================

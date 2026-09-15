@@ -218,4 +218,3 @@ class ShadowRuntime:
             managed_entities=len(self.managed_entities()),
             suppressed_sessions=len(self._suppressed_sessions),
         )
-

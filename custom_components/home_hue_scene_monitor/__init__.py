@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_API_VERSION
 from homeassistant.core import HomeAssistant
-from homeassistant.config_entries import ConfigEntry
 
 from .const import PLATFORMS
 from .coordinator import HomeHueSceneCoordinator

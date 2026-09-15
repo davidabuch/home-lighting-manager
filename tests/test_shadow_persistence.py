@@ -104,6 +104,7 @@ def test_shadow_records_explicit_homeowner_appearance_without_commanding():
             entity_id="light.a",
             evidence=homeowner_evidence(),
             appearance=Appearance(on=True, xy_color=(0.3, 0.2)),
+            manual_precedence=200,
         )
     )
 
@@ -121,6 +122,7 @@ def test_shadow_explicit_off_delegates_to_existing_off_semantics():
             entity_id="light.a",
             evidence=homeowner_evidence(),
             appearance=Appearance(on=True),
+            manual_precedence=200,
         )
     )
 
@@ -147,6 +149,7 @@ def test_shadow_export_contains_no_automatic_state():
             entity_id="light.b",
             evidence=homeowner_evidence(),
             appearance=Appearance(on=True),
+            manual_precedence=200,
         )
     )
 
@@ -227,6 +230,7 @@ def test_shadow_diagnostics_are_non_sensitive_counts_only():
             entity_id="light.a",
             evidence=homeowner_evidence(),
             appearance=Appearance(on=True),
+            manual_precedence=200,
         )
     )
     runtime.observe(
@@ -323,3 +327,110 @@ def test_shadow_off_family_suppression_is_exported_for_restart_recovery():
     assert len(payload["suppressed_sessions"]) == 1
     assert payload["suppressed_sessions"][0]["family"] == "spa_gauge"
     assert payload["suppressed_sessions"][0]["session_id"] == "spa-1"
+
+
+def test_shadow_appearance_requires_explicit_manual_precedence_policy():
+    runtime = ShadowRuntime()
+
+    result = runtime.observe(
+        ShadowObservation(
+            entity_id="light.a",
+            evidence=homeowner_evidence(),
+            appearance=Appearance(on=True, brightness=100),
+        )
+    )
+
+    assert result.mutated is False
+    assert result.reason == "Manual precedence policy is required for appearance ownership"
+    assert runtime.engine.resolve("light.a").layer is None
+
+
+def test_shadow_manual_appearance_does_not_overtake_structural_sync():
+    runtime = ShadowRuntime()
+    sync = runtime.engine.push(
+        "light.a",
+        OwnershipLayer(
+            layer_id="sync",
+            owner="sync",
+            kind=LayerKind.AUTOMATIC,
+            generation=runtime.engine.generation,
+            order=0,
+            appearance=Appearance(on=True),
+            precedence=500,
+        ),
+    )
+
+    result = runtime.observe(
+        ShadowObservation(
+            entity_id="light.a",
+            evidence=homeowner_evidence(),
+            appearance=Appearance(on=True, rgb_color=(128, 0, 128)),
+            manual_precedence=200,
+        )
+    )
+
+    assert result.mutated is True
+    assert runtime.engine.resolve("light.a").layer == sync
+    manual_layers = [
+        item for item in runtime.engine.layers("light.a") if item.kind is LayerKind.MANUAL
+    ]
+    assert len(manual_layers) == 1
+    assert manual_layers[0].appearance == Appearance(on=True, rgb_color=(128, 0, 128))
+
+
+def test_shadow_appearance_override_suppresses_exposed_family_and_persists_it():
+    runtime = ShadowRuntime()
+    runtime.engine.push(
+        "light.a",
+        OwnershipLayer(
+            layer_id="daily",
+            owner="daily",
+            kind=LayerKind.AUTOMATIC,
+            generation=runtime.engine.generation,
+            order=0,
+            appearance=Appearance(on=True),
+            precedence=100,
+        ),
+    )
+    runtime.engine.start_family("49ers", "game-1")
+    runtime.engine.push(
+        "light.a",
+        OwnershipLayer(
+            layer_id="49ers",
+            owner="49ers",
+            kind=LayerKind.AUTOMATIC,
+            generation=runtime.engine.generation,
+            order=0,
+            appearance=Appearance(on=True, rgb_color=(170, 0, 0)),
+            family="49ers",
+            session_id="game-1",
+            precedence=300,
+        ),
+    )
+
+    result = runtime.observe(
+        ShadowObservation(
+            entity_id="light.a",
+            evidence=homeowner_evidence(),
+            appearance=Appearance(on=True, color_temp_kelvin=4000),
+            manual_precedence=200,
+        )
+    )
+
+    assert result.mutated is True
+    assert runtime.engine.family_eligible("49ers", "game-1") is False
+    assert runtime.engine.resolve("light.a").layer.kind is LayerKind.MANUAL
+
+    runtime.engine.manual_release("light.a")
+    assert runtime.engine.resolve("light.a").layer.owner == "daily"
+
+    payload = runtime.export_persistence()
+    assert payload["suppressed_sessions"] == [
+        {
+            "family": "49ers",
+            "session_id": "game-1",
+            "generation": 1,
+            "suppressed": True,
+            "suppression_reason": "homeowner_override",
+        }
+    ]

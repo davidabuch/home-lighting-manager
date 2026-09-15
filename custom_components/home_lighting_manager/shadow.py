@@ -30,6 +30,7 @@ class ShadowObservation:
     evidence: IntentEvidence
     appearance: Appearance | None = None
     operation: str = "appearance"
+    manual_precedence: int | None = None
 
 
 @dataclass(frozen=True)
@@ -114,10 +115,23 @@ class ShadowRuntime:
                 reason="homeowner evidence lacked a supported shadow operation",
             )
 
+        if observation.manual_precedence is None:
+            return ShadowDecision(
+                entity_id=observation.entity_id,
+                intent=decision,
+                mutated=False,
+                reason="Manual precedence policy is required for appearance ownership",
+            )
+
         self._known_entities.add(observation.entity_id)
-        self.engine.remove_homeowner_exceptions(observation.entity_id)
         current = self.engine.resolve(observation.entity_id).layer
-        precedence = 0 if current is None else current.precedence
+        if current is not None and current.family is not None and current.session_id is not None:
+            session = self.engine.suppress_family(
+                current.family, current.session_id, "homeowner_override"
+            )
+            self._suppressed_sessions[(current.family, current.session_id)] = session
+
+        self.engine.remove_homeowner_exceptions(observation.entity_id)
         self.engine.push(
             observation.entity_id,
             OwnershipLayer(
@@ -128,7 +142,7 @@ class ShadowRuntime:
                 order=0,
                 appearance=observation.appearance,
                 expires_at_boundary=NIGHTLY_BOUNDARY,
-                precedence=precedence,
+                precedence=observation.manual_precedence,
                 metadata={"shadow": True},
             ),
         )

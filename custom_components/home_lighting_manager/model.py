@@ -20,6 +20,22 @@ class LayerKind(StrEnum):
     OVERLAY = "overlay"
 
 
+class OffAction(StrEnum):
+    """Ownership mutation produced by an explicit homeowner OFF."""
+
+    RELEASED_MANUAL = "released_manual"
+    SUPPRESSED_FAMILY = "suppressed_family"
+    CREATED_MANUAL_OFF = "created_manual_off"
+    ALREADY_MANUAL_OFF = "already_manual_off"
+
+
+class GroupOffAction(StrEnum):
+    """Phase of the approved two-step group-OFF interaction."""
+
+    RELEASED_TO_HLM = "released_to_hlm"
+    CREATED_GROUP_MANUAL_OFF = "created_group_manual_off"
+
+
 @dataclass(frozen=True)
 class Appearance:
     """Desired visible appearance owned by one layer."""
@@ -28,6 +44,8 @@ class Appearance:
     brightness: int | None = None
     color_temp_kelvin: int | None = None
     xy_color: tuple[float, float] | None = None
+    rgb_color: tuple[int, int, int] | None = None
+    hs_color: tuple[float, float] | None = None
     effect: str | None = None
     scene_id: str | None = None
 
@@ -45,6 +63,7 @@ class OwnershipLayer:
     family: str | None = None
     session_id: str | None = None
     expires_at_boundary: str | None = None
+    precedence: int = 0
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -57,6 +76,25 @@ class FamilySession:
     generation: int
     suppressed: bool = False
     suppression_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class OffResult:
+    """Result of interpreting one explicit entity OFF command."""
+
+    entity_id: str
+    action: OffAction
+    previous_layer: OwnershipLayer | None
+    effective_layer: OwnershipLayer | None
+
+
+@dataclass(frozen=True)
+class GroupOffResult:
+    """Result of interpreting one explicit group OFF command."""
+
+    group_id: str
+    action: GroupOffAction
+    entity_ids: tuple[str, ...]
 
 
 @dataclass(frozen=True)

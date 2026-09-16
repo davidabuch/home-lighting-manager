@@ -180,11 +180,14 @@ class HomeAssistantShadowObserver:
             is not IntentAttributionSource.UNATTRIBUTED_EXTERNAL
         ):
             return
+        members = _member_entity_ids_for_observation(
+            self.hass, observation.entity_id, new_state
+        )
         summary = self._external_correlator.observe(
             ExternalTopologyEvent(
                 timestamp=dt_util.now(),
                 entity_id=observation.entity_id,
-                member_entity_ids=_member_entity_ids(new_state),
+                member_entity_ids=members,
             )
         )
         self._external_burst = summary.as_dict()
@@ -195,7 +198,9 @@ class HomeAssistantShadowObserver:
     ) -> None:
         """Record a bounded, non-commanding attribution ledger for commissioning."""
         evidence = observation.evidence
-        members = _member_entity_ids(new_state)
+        members = _member_entity_ids_for_observation(
+            self.hass, observation.entity_id, new_state
+        )
         self._evidence_ledger.append(
             {
                 "timestamp": dt_util.now().isoformat(),
@@ -319,6 +324,24 @@ def _attribution_source_from_context(context: Context) -> IntentAttributionSourc
         return IntentAttributionSource.UNATTRIBUTED_EXTERNAL
     return IntentAttributionSource.UNKNOWN
 
+
+
+def _member_entity_ids_for_observation(
+    hass: HomeAssistant, entity_id: str, event_state: State
+) -> tuple[str, ...]:
+    """Resolve aggregate membership from canonical HA state, with event fallback.
+
+    Some integration-generated state_changed payloads do not preserve the
+    aggregate membership attributes that are present on the canonical state
+    machine entry. Topology diagnostics therefore prefer current HA truth and
+    use the event snapshot only when canonical membership is unavailable.
+    """
+    current = hass.states.get(entity_id)
+    if current is not None:
+        members = _member_entity_ids(current)
+        if members:
+            return members
+    return _member_entity_ids(event_state)
 
 
 def _member_entity_ids(state: State) -> tuple[str, ...]:

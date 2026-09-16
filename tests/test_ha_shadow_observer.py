@@ -662,3 +662,104 @@ async def test_started_event_does_not_duplicate_topology_retry_timers(
 
     await observer.async_shutdown()
     await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_topology_cache_discovers_unconfigured_live_aggregate(tmp_path):
+    from homeassistant.core import HomeAssistant
+
+    from custom_components.home_lighting_manager.ha_observer import (
+        DIAGNOSTIC_ENTITY_ID,
+        HomeAssistantShadowObserver,
+    )
+
+    hass = HomeAssistant(str(tmp_path))
+
+    hass.states.async_set("light.managed_leaf", "on")
+    hass.states.async_set("light.other_leaf", "on")
+    hass.states.async_set(
+        "light.unconfigured_aggregate",
+        "on",
+        {
+            "entity_id": [
+                "light.managed_leaf",
+                "light.other_leaf",
+            ]
+        },
+    )
+
+    observer = HomeAssistantShadowObserver(
+        hass,
+        ["light.managed_leaf"],
+    )
+
+    await observer.async_start()
+
+    assert observer._topology_members["light.unconfigured_aggregate"] == (
+        "light.managed_leaf",
+        "light.other_leaf",
+    )
+
+    health = hass.states.get(DIAGNOSTIC_ENTITY_ID)
+    assert health is not None
+    assert health.attributes["topology_cache_ready"] is True
+    assert health.attributes["topology_aggregate_count"] == 1
+    assert health.attributes["topology_member_count"] == 2
+
+    await observer.async_shutdown()
+    await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_external_event_refreshes_live_topology_before_correlation(
+    tmp_path, monkeypatch
+):
+    from homeassistant.core import Context, HomeAssistant, State
+
+    from custom_components.home_lighting_manager.ha_observer import (
+        HomeAssistantShadowObserver,
+        observation_from_state_change,
+    )
+
+    hass = HomeAssistant(str(tmp_path))
+
+    observer = HomeAssistantShadowObserver(
+        hass,
+        ["light.managed_leaf"],
+    )
+    await observer.async_start()
+
+    # Aggregate membership appears after the observer's startup snapshot.
+    hass.states.async_set(
+        "light.late_aggregate",
+        "on",
+        {"entity_id": ["light.managed_leaf"]},
+    )
+
+    old_state = State(
+        "light.managed_leaf",
+        "on",
+        {"brightness": 255},
+    )
+    new_state = State(
+        "light.managed_leaf",
+        "on",
+        {"brightness": 128},
+    )
+
+    observation = observation_from_state_change(
+        "light.managed_leaf",
+        old_state,
+        new_state,
+        Context(),
+    )
+    assert observation is not None
+
+    observer._record_external_topology(observation, new_state)
+
+    assert observer._topology_members["light.late_aggregate"] == (
+        "light.managed_leaf",
+    )
+
+    await observer.async_shutdown()
+    await hass.async_block_till_done()

@@ -333,3 +333,50 @@ async def test_diagnostic_evidence_ledger_is_bounded_and_explains_unattributed_e
 
     await observer.async_shutdown()
     await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_topology_membership_prefers_canonical_state_when_event_snapshot_lacks_members(tmp_path):
+    from homeassistant.core import HomeAssistant, State
+
+    from custom_components.home_lighting_manager.ha_observer import (
+        _member_entity_ids_for_observation,
+    )
+
+    hass = HomeAssistant(str(tmp_path))
+    hass.states.async_set(
+        "light.aggregate",
+        "on",
+        {
+            "entity_id": [
+                "light.leaf_one",
+                "light.leaf_two",
+            ]
+        },
+    )
+
+    event_snapshot = State("light.aggregate", "on", {"brightness": 100})
+    assert _member_entity_ids_for_observation(
+        hass, "light.aggregate", event_snapshot
+    ) == ("light.leaf_one", "light.leaf_two")
+
+
+@pytest.mark.asyncio
+async def test_topology_membership_falls_back_to_event_snapshot_when_canonical_has_none(tmp_path):
+    from homeassistant.core import HomeAssistant, State
+
+    from custom_components.home_lighting_manager.ha_observer import (
+        _member_entity_ids_for_observation,
+    )
+
+    hass = HomeAssistant(str(tmp_path))
+    hass.states.async_set("light.aggregate", "on", {"brightness": 100})
+
+    event_snapshot = State(
+        "light.aggregate",
+        "on",
+        {"group_entities": ["light.leaf_one", "light.leaf_two"]},
+    )
+    assert _member_entity_ids_for_observation(
+        hass, "light.aggregate", event_snapshot
+    ) == ("light.leaf_one", "light.leaf_two")

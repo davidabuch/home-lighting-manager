@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 
 from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.util import dt as dt_util
@@ -61,7 +60,12 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
 
         observed_at = dt_util.now()
         members = self._member_entity_ids_for_event(observation.entity_id, new_state)
-        if not members:
+        if (
+            not members
+            and observation.evidence.kind is IntentEvidenceKind.UNKNOWN
+            and observation.operation in ("appearance", "off")
+            and (observation.operation == "off" or observation.appearance is not None)
+        ):
             self._pending_external_leaves[observation.entity_id] = _PendingExternalLeaf(
                 observed_at=observed_at,
                 observation=observation,

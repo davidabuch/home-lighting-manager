@@ -7,6 +7,7 @@ states. It must never call Home Assistant services or command a device.
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Iterable, Mapping
 from datetime import datetime, time, timedelta
 from typing import Any
 
@@ -178,7 +179,6 @@ class HomeAssistantShadowObserver:
             await self.async_save()
         else:
             self._publish_diagnostics()
-
 
     @callback
     def _record_external_topology(
@@ -396,7 +396,6 @@ def observation_from_state_change(
     )
 
 
-
 def _attribution_source_from_context(context: Context) -> IntentAttributionSource:
     """Preserve HA context topology without over-claiming homeowner provenance."""
     if context.user_id is not None and context.parent_id is None:
@@ -406,7 +405,6 @@ def _attribution_source_from_context(context: Context) -> IntentAttributionSourc
     if context.user_id is None:
         return IntentAttributionSource.UNATTRIBUTED_EXTERNAL
     return IntentAttributionSource.UNKNOWN
-
 
 
 def _member_entity_ids_for_observation(
@@ -430,12 +428,19 @@ def _member_entity_ids_for_observation(
 def _member_entity_ids(state: State) -> tuple[str, ...]:
     """Return direct light-aggregate membership exposed by Home Assistant, if any."""
     raw = state.attributes.get("entity_id")
-    if not isinstance(raw, (list, tuple)):
+    if not _is_membership_container(raw):
         raw = state.attributes.get("group_entities")
-    if not isinstance(raw, (list, tuple)):
+    if not _is_membership_container(raw):
         return ()
     members = [item for item in raw if isinstance(item, str) and item.startswith("light.")]
     return tuple(dict.fromkeys(members))
+
+
+def _is_membership_container(value: Any) -> bool:
+    """Accept HA membership iterables without treating strings/mappings as member collections."""
+    return isinstance(value, Iterable) and not isinstance(
+        value, (str, bytes, bytearray, Mapping)
+    )
 
 
 def _appearance_from_state(state: State) -> Appearance:

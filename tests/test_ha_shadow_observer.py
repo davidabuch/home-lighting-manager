@@ -1,0 +1,263 @@
+"""Tests for the observation-only Home Assistant adapter."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from pathlib import Path
+
+import pytest
+
+from custom_components.home_lighting_manager.ha_observer import (
+    _crossed_nightly_boundary,
+    _next_generation,
+)
+
+
+def test_generation_advances_from_persisted_payload():
+    assert _next_generation({"generation": 7}) == 8
+    assert _next_generation({"generation": True}) == 1
+    assert _next_generation({"generation": "7"}) == 1
+    assert _next_generation(None) == 1
+
+
+def test_nightly_boundary_detection():
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo("America/Los_Angeles")
+    assert not _crossed_nightly_boundary(
+        datetime(2026, 9, 15, 0, 30, tzinfo=tz),
+        datetime(2026, 9, 15, 1, 58, tzinfo=tz),
+    )
+    assert _crossed_nightly_boundary(
+        datetime(2026, 9, 15, 0, 30, tzinfo=tz),
+        datetime(2026, 9, 15, 2, 0, tzinfo=tz),
+    )
+    assert _crossed_nightly_boundary(
+        datetime(2026, 9, 15, 22, 0, tzinfo=tz),
+        datetime(2026, 9, 16, 2, 0, tzinfo=tz),
+    )
+
+
+def test_observer_source_contains_no_command_service_calls():
+    source = Path(
+        "custom_components/home_lighting_manager/ha_observer.py"
+    ).read_text()
+    forbidden = (
+        "services.async_call",
+        "hass.services.async_call",
+        "light.turn_on",
+        "light.turn_off",
+        "scene.turn_on",
+    )
+    for token in forbidden:
+        assert token not in source
+
+
+@pytest.mark.asyncio
+async def test_observer_lifecycle_and_high_confidence_manual_tracking(tmp_path):
+    from homeassistant.core import Context, HomeAssistant
+
+    from custom_components.home_lighting_manager.ha_observer import (
+        DIAGNOSTIC_ENTITY_ID,
+        HomeAssistantShadowObserver,
+    )
+
+    hass = HomeAssistant(str(tmp_path))
+    hass.config.time_zone = "America/Los_Angeles"
+    observer = HomeAssistantShadowObserver(
+        hass, ["light.shadow_test"], {"light.shadow_test": 250}
+    )
+    await observer.async_start()
+
+    hass.states.async_set(
+        "light.shadow_test",
+        "on",
+        {"brightness": 123, "rgb_color": (1, 2, 3)},
+        context=Context(user_id="test-user"),
+    )
+    await hass.async_block_till_done()
+
+    layer = observer.runtime.engine.resolve("light.shadow_test").layer
+    assert layer is not None
+    assert layer.owner == "manual"
+    assert layer.appearance is not None
+    assert layer.appearance.brightness == 123
+    assert layer.appearance.rgb_color == (1, 2, 3)
+
+    diagnostics = hass.states.get(DIAGNOSTIC_ENTITY_ID)
+    assert diagnostics is not None
+    assert diagnostics.state == "observing"
+    assert diagnostics.attributes["command_authority"] is False
+    assert diagnostics.attributes["homeowner_events"] == 1
+
+    await observer.async_shutdown()
+    await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_high_confidence_appearance_without_precedence_does_not_create_manual(tmp_path):
+    from homeassistant.core import Context, HomeAssistant
+
+    from custom_components.home_lighting_manager.ha_observer import HomeAssistantShadowObserver
+
+    hass = HomeAssistant(str(tmp_path))
+    hass.config.time_zone = "America/Los_Angeles"
+    observer = HomeAssistantShadowObserver(hass, ["light.shadow_test"])
+    await observer.async_start()
+
+    hass.states.async_set(
+        "light.shadow_test",
+        "on",
+        {"brightness": 123},
+        context=Context(user_id="test-user"),
+    )
+    await hass.async_block_till_done()
+
+    assert observer.runtime.engine.resolve("light.shadow_test").layer is None
+    diagnostics = observer.runtime.diagnostics()
+    assert diagnostics.homeowner_events == 1
+
+    await observer.async_shutdown()
+    await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_unattributed_state_change_does_not_create_manual(tmp_path):
+    from homeassistant.core import HomeAssistant
+
+    from custom_components.home_lighting_manager.ha_observer import HomeAssistantShadowObserver
+
+    hass = HomeAssistant(str(tmp_path))
+    hass.config.time_zone = "America/Los_Angeles"
+    observer = HomeAssistantShadowObserver(hass, ["light.shadow_test"])
+    await observer.async_start()
+
+    hass.states.async_set("light.shadow_test", "on", {"brightness": 200})
+    await hass.async_block_till_done()
+
+    assert observer.runtime.engine.resolve("light.shadow_test").layer is None
+    assert observer.runtime.diagnostics().ignored_or_hlm_events == 1
+
+    await observer.async_shutdown()
+    await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_light_is_ignored(tmp_path):
+    from homeassistant.core import Context, HomeAssistant
+
+    from custom_components.home_lighting_manager.ha_observer import HomeAssistantShadowObserver
+
+    hass = HomeAssistant(str(tmp_path))
+    observer = HomeAssistantShadowObserver(hass, ["light.managed"])
+    await observer.async_start()
+
+    hass.states.async_set(
+        "light.not_managed",
+        "on",
+        {"brightness": 200},
+        context=Context(user_id="test-user"),
+    )
+    await hass.async_block_till_done()
+
+    assert observer.runtime.diagnostics().observed_events == 0
+    await observer.async_shutdown()
+    await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_startup_checkpoints_new_generation_immediately(tmp_path):
+    from homeassistant.core import HomeAssistant
+
+    from custom_components.home_lighting_manager.ha_observer import HomeAssistantShadowObserver
+
+    hass = HomeAssistant(str(tmp_path))
+    hass.config.time_zone = "America/Los_Angeles"
+    observer = HomeAssistantShadowObserver(hass, ["light.shadow_test"])
+    await observer.async_start()
+
+    stored = await observer.store.async_load()
+    assert stored is not None
+    assert stored["generation"] == 1
+
+    await observer.async_shutdown()
+    await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_restart_drops_persisted_manual_when_current_state_does_not_match(tmp_path):
+    from homeassistant.core import HomeAssistant
+    from homeassistant.util import dt as dt_util
+
+    from custom_components.home_lighting_manager.ha_observer import HomeAssistantShadowObserver
+    from custom_components.home_lighting_manager.model import Appearance, LayerKind, OwnershipLayer
+    from custom_components.home_lighting_manager.persistence import serialize_state
+
+    hass = HomeAssistant(str(tmp_path))
+    hass.config.time_zone = "America/Los_Angeles"
+    observer = HomeAssistantShadowObserver(hass, ["light.shadow_test"])
+    layer = OwnershipLayer(
+        layer_id="persisted-manual",
+        owner="manual",
+        kind=LayerKind.MANUAL,
+        generation=7,
+        order=1,
+        appearance=Appearance(on=True, brightness=123),
+        precedence=250,
+    )
+    payload = serialize_state({"light.shadow_test": [layer]}, [])
+    payload["generation"] = 7
+    payload["saved_at"] = dt_util.now().isoformat()
+    await observer.store.async_save(payload)
+    hass.states.async_set("light.shadow_test", "on", {"brightness": 200})
+
+    await observer.async_start()
+
+    assert observer.runtime.engine.generation == 8
+    assert observer.runtime.engine.resolve("light.shadow_test").layer is None
+
+    await observer.async_shutdown()
+    await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_restart_restores_persisted_manual_only_when_current_state_corroborates_it(tmp_path):
+    from homeassistant.core import HomeAssistant
+    from homeassistant.util import dt as dt_util
+
+    from custom_components.home_lighting_manager.ha_observer import HomeAssistantShadowObserver
+    from custom_components.home_lighting_manager.model import Appearance, LayerKind, OwnershipLayer
+    from custom_components.home_lighting_manager.persistence import serialize_state
+
+    hass = HomeAssistant(str(tmp_path))
+    hass.config.time_zone = "America/Los_Angeles"
+    observer = HomeAssistantShadowObserver(hass, ["light.shadow_test"])
+    layer = OwnershipLayer(
+        layer_id="persisted-manual",
+        owner="manual",
+        kind=LayerKind.MANUAL,
+        generation=7,
+        order=1,
+        appearance=Appearance(on=True, brightness=123, rgb_color=(1, 2, 3)),
+        precedence=250,
+    )
+    payload = serialize_state({"light.shadow_test": [layer]}, [])
+    payload["generation"] = 7
+    payload["saved_at"] = dt_util.now().isoformat()
+    await observer.store.async_save(payload)
+    hass.states.async_set(
+        "light.shadow_test",
+        "on",
+        {"brightness": 123, "rgb_color": (1, 2, 3)},
+    )
+
+    await observer.async_start()
+
+    restored = observer.runtime.engine.resolve("light.shadow_test").layer
+    assert observer.runtime.engine.generation == 8
+    assert restored is not None
+    assert restored.owner == "manual"
+    assert restored.generation == 8
+
+    await observer.async_shutdown()
+    await hass.async_block_till_done()

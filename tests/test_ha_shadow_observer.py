@@ -434,3 +434,81 @@ async def test_observer_topology_cache_learns_membership_from_event_fallback(tmp
 
     await observer.async_shutdown()
     await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_started_event_refreshes_topology_cache_and_diagnostics(tmp_path):
+    from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
+    from homeassistant.core import HomeAssistant
+
+    from custom_components.home_lighting_manager.ha_observer import (
+        DIAGNOSTIC_ENTITY_ID,
+        HomeAssistantShadowObserver,
+    )
+
+    hass = HomeAssistant(str(tmp_path))
+    observer = HomeAssistantShadowObserver(
+        hass,
+        ["light.aggregate", "light.leaf_one", "light.leaf_two"],
+    )
+    await observer.async_start()
+
+    assert observer._topology_members == {}
+
+    hass.states.async_set(
+        "light.aggregate",
+        "on",
+        {
+            "entity_id": [
+                "light.leaf_one",
+                "light.leaf_two",
+            ]
+        },
+    )
+
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+    await hass.async_block_till_done()
+
+    assert observer._topology_members["light.aggregate"] == (
+        "light.leaf_one",
+        "light.leaf_two",
+    )
+
+    health = hass.states.get(DIAGNOSTIC_ENTITY_ID)
+    assert health is not None
+    assert health.attributes["topology_aggregate_count"] == 1
+    assert health.attributes["topology_member_count"] == 2
+    assert health.attributes["topology_aggregate_entities"] == ["light.aggregate"]
+
+    await observer.async_shutdown()
+    await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_started_event_refresh_does_not_change_command_authority(tmp_path):
+    from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
+    from homeassistant.core import HomeAssistant
+
+    from custom_components.home_lighting_manager.ha_observer import (
+        DIAGNOSTIC_ENTITY_ID,
+        HomeAssistantShadowObserver,
+    )
+
+    hass = HomeAssistant(str(tmp_path))
+    observer = HomeAssistantShadowObserver(hass, ["light.aggregate"])
+    await observer.async_start()
+
+    hass.states.async_set(
+        "light.aggregate",
+        "on",
+        {"entity_id": ["light.leaf_one"]},
+    )
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+    await hass.async_block_till_done()
+
+    health = hass.states.get(DIAGNOSTIC_ENTITY_ID)
+    assert health is not None
+    assert health.attributes["command_authority"] is False
+
+    await observer.async_shutdown()
+    await hass.async_block_till_done()

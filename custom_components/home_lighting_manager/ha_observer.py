@@ -184,12 +184,18 @@ class HomeAssistantShadowObserver:
     def _record_external_topology(
         self, observation: ShadowObservation, new_state: State
     ) -> None:
-        """Correlate unattributed external events without changing ownership policy."""
+        """Correlate unattributed external events against current HA topology."""
         if (
             observation.evidence.attribution_source
             is not IntentAttributionSource.UNATTRIBUTED_EXTERNAL
         ):
             return
+
+        # Attribution correctness must not depend on startup ordering or a stale
+        # warm cache. Refresh from current Home Assistant truth at the moment an
+        # unattributed external lighting event is being correlated.
+        self._refresh_topology_cache()
+
         members = self._member_entity_ids_for_event(
             observation.entity_id, new_state
         )
@@ -231,15 +237,17 @@ class HomeAssistantShadowObserver:
 
     @callback
     def _refresh_topology_cache(self) -> None:
-        """Snapshot aggregate membership from stable HA state-machine entries."""
+        """Snapshot aggregate membership from all live HA light states."""
         cache: dict[str, tuple[str, ...]] = {}
-        for entity_id in self.entity_ids:
-            state = self.hass.states.get(entity_id)
-            if state is None:
+
+        for state in self.hass.states.async_all():
+            if not state.entity_id.startswith("light."):
                 continue
+
             members = _member_entity_ids(state)
             if members:
-                cache[entity_id] = members
+                cache[state.entity_id] = members
+
         self._topology_members = cache
 
     @callback

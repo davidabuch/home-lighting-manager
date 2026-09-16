@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .engine import NIGHTLY_BOUNDARY, OwnershipEngine
-from .intent import IntentDecision, IntentDisposition, IntentEvidence, classify_intent
+from .intent_policy import IntentDecision, IntentDisposition, IntentEvidence, classify_intent
 from .model import Appearance, FamilySession, LayerKind, OffAction, OwnershipLayer
 from .persistence import PersistedOwnershipState, serialize_state
 from .recovery import (

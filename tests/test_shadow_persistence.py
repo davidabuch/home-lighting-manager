@@ -1,4 +1,4 @@
-from custom_components.home_lighting_manager.intent import IntentEvidence, IntentEvidenceKind
+from custom_components.home_lighting_manager.intent_policy import IntentEvidence, IntentEvidenceKind
 from custom_components.home_lighting_manager.model import (
     Appearance,
     FamilySession,

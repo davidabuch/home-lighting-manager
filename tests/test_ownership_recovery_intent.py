@@ -1,4 +1,4 @@
-from custom_components.home_lighting_manager.intent import (
+from custom_components.home_lighting_manager.intent_policy import (
     IntentDisposition,
     IntentEvidence,
     IntentEvidenceKind,

@@ -10,6 +10,15 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 
+class IntentAttributionSource(StrEnum):
+    """Best available source attribution for observed evidence."""
+
+    HOME_ASSISTANT_USER = "home_assistant_user"
+    HOME_ASSISTANT_CHAIN = "home_assistant_chain"
+    UNATTRIBUTED_EXTERNAL = "unattributed_external"
+    UNKNOWN = "unknown"
+
+
 class IntentEvidenceKind(StrEnum):
     """High-level evidence classes produced by future runtime adapters."""
 
@@ -36,6 +45,9 @@ class IntentEvidence:
     kind: IntentEvidenceKind
     succeeded: bool = True
     attribution_coherent: bool = True
+    attribution_source: IntentAttributionSource = IntentAttributionSource.UNKNOWN
+    has_user_id: bool = False
+    has_parent_id: bool = False
 
 
 @dataclass(frozen=True)

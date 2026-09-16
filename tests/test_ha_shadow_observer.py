@@ -581,3 +581,84 @@ async def test_topology_cache_ready_false_when_no_memberships_exist(tmp_path):
 
     await observer.async_shutdown()
     await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_async_start_schedules_topology_retries_without_started_event(
+    tmp_path, monkeypatch
+):
+    from homeassistant.core import HomeAssistant
+
+    import custom_components.home_lighting_manager.ha_observer as observer_module
+    from custom_components.home_lighting_manager.ha_observer import (
+        HomeAssistantShadowObserver,
+    )
+
+    scheduled = []
+
+    def fake_async_call_later(hass, delay, callback):
+        scheduled.append((delay, callback))
+
+        def unsub():
+            return None
+
+        return unsub
+
+    monkeypatch.setattr(
+        observer_module,
+        "async_call_later",
+        fake_async_call_later,
+    )
+
+    hass = HomeAssistant(str(tmp_path))
+    observer = HomeAssistantShadowObserver(hass, ["light.aggregate"])
+
+    await observer.async_start()
+
+    assert [delay for delay, _callback in scheduled] == [5, 15, 30]
+
+    await observer.async_shutdown()
+    await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_started_event_does_not_duplicate_topology_retry_timers(
+    tmp_path, monkeypatch
+):
+    from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
+    from homeassistant.core import HomeAssistant
+
+    import custom_components.home_lighting_manager.ha_observer as observer_module
+    from custom_components.home_lighting_manager.ha_observer import (
+        HomeAssistantShadowObserver,
+    )
+
+    scheduled = []
+
+    def fake_async_call_later(hass, delay, callback):
+        scheduled.append(delay)
+
+        def unsub():
+            return None
+
+        return unsub
+
+    monkeypatch.setattr(
+        observer_module,
+        "async_call_later",
+        fake_async_call_later,
+    )
+
+    hass = HomeAssistant(str(tmp_path))
+    observer = HomeAssistantShadowObserver(hass, ["light.aggregate"])
+
+    await observer.async_start()
+    assert scheduled == [5, 15, 30]
+
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+    await hass.async_block_till_done()
+
+    assert scheduled == [5, 15, 30]
+
+    await observer.async_shutdown()
+    await hass.async_block_till_done()

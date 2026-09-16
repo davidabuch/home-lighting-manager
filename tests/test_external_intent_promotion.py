@@ -149,6 +149,48 @@ async def test_qualified_external_leaf_without_precedence_promotes_intent_but_no
 
 
 @pytest.mark.asyncio
+async def test_availability_change_is_never_retained_for_homeowner_promotion(tmp_path):
+    from homeassistant.core import HomeAssistant
+
+    from custom_components.home_lighting_manager.ha_observer import DIAGNOSTIC_ENTITY_ID
+    from custom_components.home_lighting_manager.promotion_observer import (
+        PromotingHomeAssistantShadowObserver,
+    )
+
+    hass = HomeAssistant(str(tmp_path))
+    hass.config.time_zone = "America/Los_Angeles"
+    observer = PromotingHomeAssistantShadowObserver(
+        hass,
+        ["light.path_1", "light.path_group"],
+        {"light.path_1": 250},
+    )
+    await observer.async_start()
+
+    hass.states.async_set("light.path_1", "unavailable")
+    await hass.async_block_till_done()
+    hass.states.async_set("light.path_1", "on", {"brightness": 128})
+    await hass.async_block_till_done()
+    hass.states.async_set(
+        "light.path_group",
+        "on",
+        {"entity_id": ["light.path_1", "light.path_2"], "brightness": 128},
+    )
+    await hass.async_block_till_done()
+
+    assert observer.runtime.engine.resolve("light.path_1").layer is None
+    health = hass.states.get(DIAGNOSTIC_ENTITY_ID)
+    assert health is not None
+    candidate = health.attributes["external_burst"]["external_intent_candidate"]
+    assert candidate["qualified"] is True
+    assert candidate["promoted_to_homeowner"] is False
+    assert candidate["manual_ownership_recorded"] is False
+    assert candidate["promotion_reason"] == "qualified burst lacked retained leaf observation"
+
+    await observer.async_shutdown()
+    await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
 async def test_same_external_burst_is_promoted_only_once(tmp_path):
     from homeassistant.core import HomeAssistant
 

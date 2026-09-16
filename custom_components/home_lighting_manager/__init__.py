@@ -10,13 +10,9 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
-from .ha_observer import (
-    CONF_MANUAL_PRECEDENCE,
-    CONF_SHADOW_ENTITIES,
-    DOMAIN,
-    HomeAssistantShadowObserver,
-)
+from .ha_observer import CONF_MANUAL_PRECEDENCE, CONF_SHADOW_ENTITIES, DOMAIN
 from .ha_observer import CONFIG_SCHEMA as CONFIG_SCHEMA
+from .promotion_observer import PromotingHomeAssistantShadowObserver
 
 
 async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
@@ -27,7 +23,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
 
     entity_ids = domain_config.get(CONF_SHADOW_ENTITIES, [])
     manual_precedence = domain_config.get(CONF_MANUAL_PRECEDENCE, {})
-    observer = HomeAssistantShadowObserver(
+    observer = PromotingHomeAssistantShadowObserver(
         hass,
         list(entity_ids),
         dict(manual_precedence),

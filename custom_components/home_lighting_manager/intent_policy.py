@@ -23,6 +23,7 @@ class IntentEvidenceKind(StrEnum):
     """High-level evidence classes produced by future runtime adapters."""
 
     EXPLICIT_HOMEOWNER_COMMAND = "explicit_homeowner_command"
+    CORRELATED_EXTERNAL_HOMEOWNER_COMMAND = "correlated_external_homeowner_command"
     HLM_COMMAND_CONSEQUENCE = "hlm_command_consequence"
     RECOVERY_TELEMETRY = "recovery_telemetry"
     AVAILABILITY_CHANGE = "availability_change"
@@ -78,6 +79,30 @@ def classify_intent(evidence: IntentEvidence) -> IntentDecision:
             disposition=IntentDisposition.HLM_OWNED,
             allows_homeowner_mutation=False,
             reason="ambiguous homeowner attribution defaults to HLM",
+        )
+
+    if evidence.kind is IntentEvidenceKind.CORRELATED_EXTERNAL_HOMEOWNER_COMMAND:
+        if not evidence.succeeded:
+            return IntentDecision(
+                disposition=IntentDisposition.NO_OWNERSHIP_CHANGE,
+                allows_homeowner_mutation=False,
+                reason="failed correlated external command cannot create ownership",
+            )
+        if (
+            evidence.attribution_coherent
+            and evidence.attribution_source is IntentAttributionSource.UNATTRIBUTED_EXTERNAL
+            and not evidence.has_user_id
+            and not evidence.has_parent_id
+        ):
+            return IntentDecision(
+                disposition=IntentDisposition.HOMEOWNER_INTENT,
+                allows_homeowner_mutation=True,
+                reason="qualified external topology correlation",
+            )
+        return IntentDecision(
+            disposition=IntentDisposition.HLM_OWNED,
+            allows_homeowner_mutation=False,
+            reason="external homeowner correlation was not coherent",
         )
 
     if evidence.kind is IntentEvidenceKind.HLM_COMMAND_CONSEQUENCE:

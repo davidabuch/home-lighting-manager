@@ -24,6 +24,7 @@ from homeassistant.helpers.event import async_track_time_change
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
+from .attribution_correlation import ExternalBurstCorrelator, ExternalTopologyEvent
 from .engine import NIGHTLY_BOUNDARY
 from .intent_policy import (
     IntentAttributionSource,
@@ -42,6 +43,7 @@ STORAGE_KEY = f"{DOMAIN}.shadow"
 RUNTIME_DATA_KEY = f"{DOMAIN}_shadow_runtime"
 DIAGNOSTIC_ENTITY_ID = "sensor.home_lighting_manager_shadow_health"
 EVIDENCE_LEDGER_SIZE = 12
+EXTERNAL_BURST_WINDOW_SECONDS = 2.0
 
 CONFIG_SCHEMA = vol.Schema(
     {
@@ -76,6 +78,10 @@ class HomeAssistantShadowObserver:
         self._last_decision: ShadowDecision | None = None
         self._storage_status = "empty"
         self._evidence_ledger: deque[dict[str, Any]] = deque(maxlen=EVIDENCE_LEDGER_SIZE)
+        self._external_correlator = ExternalBurstCorrelator(
+            window_seconds=EXTERNAL_BURST_WINDOW_SECONDS
+        )
+        self._external_burst: dict[str, object] | None = None
 
     async def async_start(self) -> None:
         """Load trusted evidence and begin observation without command authority."""
@@ -156,7 +162,8 @@ class HomeAssistantShadowObserver:
             return
 
         self._last_decision = self.runtime.observe(observation)
-        self._record_evidence(observation, self._last_decision)
+        self._record_external_topology(observation, new_state)
+        self._record_evidence(observation, self._last_decision, new_state)
         if self._last_decision.mutated:
             await self.async_save()
         else:
@@ -164,11 +171,31 @@ class HomeAssistantShadowObserver:
 
 
     @callback
+    def _record_external_topology(
+        self, observation: ShadowObservation, new_state: State
+    ) -> None:
+        """Correlate unattributed external events without changing ownership policy."""
+        if (
+            observation.evidence.attribution_source
+            is not IntentAttributionSource.UNATTRIBUTED_EXTERNAL
+        ):
+            return
+        summary = self._external_correlator.observe(
+            ExternalTopologyEvent(
+                timestamp=dt_util.now(),
+                entity_id=observation.entity_id,
+                member_entity_ids=_member_entity_ids(new_state),
+            )
+        )
+        self._external_burst = summary.as_dict()
+
+    @callback
     def _record_evidence(
-        self, observation: ShadowObservation, decision: ShadowDecision
+        self, observation: ShadowObservation, decision: ShadowDecision, new_state: State
     ) -> None:
         """Record a bounded, non-commanding attribution ledger for commissioning."""
         evidence = observation.evidence
+        members = _member_entity_ids(new_state)
         self._evidence_ledger.append(
             {
                 "timestamp": dt_util.now().isoformat(),
@@ -178,6 +205,8 @@ class HomeAssistantShadowObserver:
                 "attribution_source": evidence.attribution_source.value,
                 "user_context": evidence.has_user_id,
                 "parent_context": evidence.has_parent_id,
+                "entity_role": "aggregate" if members else "leaf",
+                "member_count": len(members),
                 "intent": decision.intent.disposition.value,
                 "allows_homeowner_mutation": decision.intent.allows_homeowner_mutation,
                 "mutated": decision.mutated,
@@ -211,6 +240,8 @@ class HomeAssistantShadowObserver:
             "command_authority": False,
             "evidence_ledger_size": EVIDENCE_LEDGER_SIZE,
             "recent_evidence": list(self._evidence_ledger),
+            "external_burst_window_seconds": EXTERNAL_BURST_WINDOW_SECONDS,
+            "external_burst": self._external_burst,
         }
         if self._last_decision is not None:
             attrs.update(
@@ -287,6 +318,18 @@ def _attribution_source_from_context(context: Context) -> IntentAttributionSourc
     if context.user_id is None:
         return IntentAttributionSource.UNATTRIBUTED_EXTERNAL
     return IntentAttributionSource.UNKNOWN
+
+
+
+def _member_entity_ids(state: State) -> tuple[str, ...]:
+    """Return direct light-aggregate membership exposed by Home Assistant, if any."""
+    raw = state.attributes.get("entity_id")
+    if not isinstance(raw, (list, tuple)):
+        raw = state.attributes.get("group_entities")
+    if not isinstance(raw, (list, tuple)):
+        return ()
+    members = [item for item in raw if isinstance(item, str) and item.startswith("light.")]
+    return tuple(dict.fromkeys(members))
 
 
 def _appearance_from_state(state: State) -> Appearance:

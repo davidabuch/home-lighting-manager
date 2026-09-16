@@ -12,6 +12,7 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant.const import (
+    EVENT_HOMEASSISTANT_STARTED,
     EVENT_HOMEASSISTANT_STOP,
     STATE_OFF,
     STATE_ON,
@@ -120,6 +121,11 @@ class HomeAssistantShadowObserver:
                 hour=1,
                 minute=59,
                 second=0,
+            )
+        )
+        self._unsubscribers.append(
+            self.hass.bus.async_listen_once(
+                EVENT_HOMEASSISTANT_STARTED, self._async_started_event
             )
         )
         self._unsubscribers.append(
@@ -263,6 +269,11 @@ class HomeAssistantShadowObserver:
         self.runtime.engine.expire_boundary(NIGHTLY_BOUNDARY)
         self.hass.async_create_task(self.async_save())
 
+    async def _async_started_event(self, _event: Event) -> None:
+        """Refresh topology once Home Assistant startup has fully completed."""
+        self._refresh_topology_cache()
+        self._publish_diagnostics()
+
     async def _async_stop_event(self, _event: Event) -> None:
         await self.async_save()
 
@@ -286,6 +297,11 @@ class HomeAssistantShadowObserver:
             "recent_evidence": list(self._evidence_ledger),
             "external_burst_window_seconds": EXTERNAL_BURST_WINDOW_SECONDS,
             "external_burst": self._external_burst,
+            "topology_aggregate_count": len(self._topology_members),
+            "topology_member_count": sum(
+                len(members) for members in self._topology_members.values()
+            ),
+            "topology_aggregate_entities": sorted(self._topology_members)[:32],
         }
         if self._last_decision is not None:
             attrs.update(

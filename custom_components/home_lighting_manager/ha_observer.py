@@ -131,6 +131,7 @@ class HomeAssistantShadowObserver:
         self._unsubscribers.append(
             self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, self._async_stop_event)
         )
+        self._schedule_delayed_topology_refreshes()
         self._publish_diagnostics()
 
     async def async_shutdown(self) -> None:
@@ -270,10 +271,13 @@ class HomeAssistantShadowObserver:
         self.hass.async_create_task(self.async_save())
 
     async def _async_started_event(self, _event: Event) -> None:
-        """Refresh topology after HA startup and schedule bounded late retries."""
+        """Refresh topology when HA startup completion is observed."""
         self._refresh_topology_cache()
         self._publish_diagnostics()
 
+    @callback
+    def _schedule_delayed_topology_refreshes(self) -> None:
+        """Schedule bounded retries relative to HLM observer startup."""
         for delay in (5, 15, 30):
             self._unsubscribers.append(
                 async_call_later(

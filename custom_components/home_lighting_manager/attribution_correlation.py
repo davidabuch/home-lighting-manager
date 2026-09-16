@@ -49,6 +49,30 @@ class ExternalBurstSummary:
     aggregate_entities: tuple[str, ...]
     propagated_leaf_entities: tuple[str, ...]
 
+    def external_intent_candidate(self) -> dict[str, object]:
+        """Describe whether topology is strong enough for a shadow intent candidate.
+
+        This is deliberately diagnostic only. A qualified candidate is not
+        homeowner intent and must not mutate ownership. It simply records that
+        one context-less leaf change is corroborated by aggregate propagation.
+        """
+        qualified = (
+            self.topology is ExternalBurstTopology.LEAF_WITH_AGGREGATE_PROPAGATION
+            and len(self.leaf_entities) == 1
+            and self.propagated_leaf_entities == self.leaf_entities
+        )
+        return {
+            "qualified": qualified,
+            "entity_id": self.leaf_entities[0] if qualified else None,
+            "basis": (
+                "single_leaf_with_aggregate_propagation"
+                if qualified
+                else "insufficient_topology_evidence"
+            ),
+            "evidence_topology": self.topology.value,
+            "promoted_to_homeowner": False,
+        }
+
     def as_dict(self) -> dict[str, object]:
         return {
             "started_at": self.started_at.isoformat(),
@@ -59,6 +83,7 @@ class ExternalBurstSummary:
             "leaf_entities": list(self.leaf_entities),
             "aggregate_entities": list(self.aggregate_entities),
             "propagated_leaf_entities": list(self.propagated_leaf_entities),
+            "external_intent_candidate": self.external_intent_candidate(),
         }
 
 

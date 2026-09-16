@@ -6,6 +6,7 @@ states. It must never call Home Assistant services or command a device.
 
 from __future__ import annotations
 
+from collections import deque
 from datetime import datetime, time, timedelta
 from typing import Any
 
@@ -24,7 +25,11 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .engine import NIGHTLY_BOUNDARY
-from .intent import IntentEvidence, IntentEvidenceKind
+from .intent_policy import (
+    IntentAttributionSource,
+    IntentEvidence,
+    IntentEvidenceKind,
+)
 from .model import Appearance, LayerKind, OwnershipLayer
 from .persistence import STORAGE_VERSION, deserialize_state
 from .recovery import ManualRecoveryEvidence
@@ -36,6 +41,7 @@ CONF_MANUAL_PRECEDENCE = "manual_precedence"
 STORAGE_KEY = f"{DOMAIN}.shadow"
 RUNTIME_DATA_KEY = f"{DOMAIN}_shadow_runtime"
 DIAGNOSTIC_ENTITY_ID = "sensor.home_lighting_manager_shadow_health"
+EVIDENCE_LEDGER_SIZE = 12
 
 CONFIG_SCHEMA = vol.Schema(
     {
@@ -69,6 +75,7 @@ class HomeAssistantShadowObserver:
         self._unsubscribers: list[Any] = []
         self._last_decision: ShadowDecision | None = None
         self._storage_status = "empty"
+        self._evidence_ledger: deque[dict[str, Any]] = deque(maxlen=EVIDENCE_LEDGER_SIZE)
 
     async def async_start(self) -> None:
         """Load trusted evidence and begin observation without command authority."""
@@ -149,10 +156,34 @@ class HomeAssistantShadowObserver:
             return
 
         self._last_decision = self.runtime.observe(observation)
+        self._record_evidence(observation, self._last_decision)
         if self._last_decision.mutated:
             await self.async_save()
         else:
             self._publish_diagnostics()
+
+
+    @callback
+    def _record_evidence(
+        self, observation: ShadowObservation, decision: ShadowDecision
+    ) -> None:
+        """Record a bounded, non-commanding attribution ledger for commissioning."""
+        evidence = observation.evidence
+        self._evidence_ledger.append(
+            {
+                "timestamp": dt_util.now().isoformat(),
+                "entity_id": observation.entity_id,
+                "operation": observation.operation,
+                "evidence_kind": evidence.kind.value,
+                "attribution_source": evidence.attribution_source.value,
+                "user_context": evidence.has_user_id,
+                "parent_context": evidence.has_parent_id,
+                "intent": decision.intent.disposition.value,
+                "allows_homeowner_mutation": decision.intent.allows_homeowner_mutation,
+                "mutated": decision.mutated,
+                "reason": decision.reason,
+            }
+        )
 
     @callback
     def _handle_nightly_boundary(self, _now: datetime) -> None:
@@ -178,6 +209,8 @@ class HomeAssistantShadowObserver:
             ),
             "storage_status": self._storage_status,
             "command_authority": False,
+            "evidence_ledger_size": EVIDENCE_LEDGER_SIZE,
+            "recent_evidence": list(self._evidence_ledger),
         }
         if self._last_decision is not None:
             attrs.update(
@@ -206,10 +239,17 @@ def observation_from_state_change(
     if new_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN) or (
         old_state is not None and old_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN)
     ):
-        evidence = IntentEvidence(kind=IntentEvidenceKind.AVAILABILITY_CHANGE)
+        evidence = IntentEvidence(
+            kind=IntentEvidenceKind.AVAILABILITY_CHANGE,
+            attribution_source=_attribution_source_from_context(context),
+            has_user_id=context.user_id is not None,
+            has_parent_id=context.parent_id is not None,
+        )
         return ShadowObservation(entity_id=entity_id, evidence=evidence, operation="appearance")
 
-    explicit_user = context.user_id is not None and context.parent_id is None
+    has_user_id = context.user_id is not None
+    has_parent_id = context.parent_id is not None
+    explicit_user = has_user_id and not has_parent_id
     evidence = IntentEvidence(
         kind=(
             IntentEvidenceKind.EXPLICIT_HOMEOWNER_COMMAND
@@ -218,6 +258,9 @@ def observation_from_state_change(
         ),
         succeeded=True,
         attribution_coherent=explicit_user,
+        attribution_source=_attribution_source_from_context(context),
+        has_user_id=has_user_id,
+        has_parent_id=has_parent_id,
     )
 
     if new_state.state == STATE_OFF:
@@ -232,6 +275,18 @@ def observation_from_state_change(
         operation="appearance",
         manual_precedence=manual_precedence,
     )
+
+
+
+def _attribution_source_from_context(context: Context) -> IntentAttributionSource:
+    """Preserve HA context topology without over-claiming homeowner provenance."""
+    if context.user_id is not None and context.parent_id is None:
+        return IntentAttributionSource.HOME_ASSISTANT_USER
+    if context.parent_id is not None:
+        return IntentAttributionSource.HOME_ASSISTANT_CHAIN
+    if context.user_id is None:
+        return IntentAttributionSource.UNATTRIBUTED_EXTERNAL
+    return IntentAttributionSource.UNKNOWN
 
 
 def _appearance_from_state(state: State) -> Appearance:

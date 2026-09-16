@@ -261,3 +261,75 @@ async def test_restart_restores_persisted_manual_only_when_current_state_corrobo
 
     await observer.async_shutdown()
     await hass.async_block_till_done()
+
+
+def test_reserved_intent_platform_filename_is_absent():
+    assert not Path("custom_components/home_lighting_manager/intent.py").exists()
+    assert Path("custom_components/home_lighting_manager/intent_policy.py").exists()
+
+
+def test_context_attribution_preserves_external_vs_ha_user_topology():
+    from homeassistant.core import Context, State
+
+    from custom_components.home_lighting_manager.ha_observer import observation_from_state_change
+    from custom_components.home_lighting_manager.intent_policy import (
+        IntentAttributionSource,
+        IntentEvidenceKind,
+    )
+
+    external = observation_from_state_change(
+        "light.shadow_test",
+        None,
+        State("light.shadow_test", "on", {"brightness": 100}),
+        Context(),
+        manual_precedence=200,
+    )
+    assert external is not None
+    assert external.evidence.kind is IntentEvidenceKind.UNKNOWN
+    assert external.evidence.attribution_source is IntentAttributionSource.UNATTRIBUTED_EXTERNAL
+    assert external.evidence.has_user_id is False
+    assert external.evidence.has_parent_id is False
+
+    homeowner = observation_from_state_change(
+        "light.shadow_test",
+        None,
+        State("light.shadow_test", "on", {"brightness": 100}),
+        Context(user_id="test-user"),
+        manual_precedence=200,
+    )
+    assert homeowner is not None
+    assert homeowner.evidence.kind is IntentEvidenceKind.EXPLICIT_HOMEOWNER_COMMAND
+    assert homeowner.evidence.attribution_source is IntentAttributionSource.HOME_ASSISTANT_USER
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_evidence_ledger_is_bounded_and_explains_unattributed_events(tmp_path):
+    from homeassistant.core import HomeAssistant
+
+    from custom_components.home_lighting_manager.ha_observer import (
+        DIAGNOSTIC_ENTITY_ID,
+        EVIDENCE_LEDGER_SIZE,
+        HomeAssistantShadowObserver,
+    )
+
+    hass = HomeAssistant(str(tmp_path))
+    hass.config.time_zone = "America/Los_Angeles"
+    observer = HomeAssistantShadowObserver(hass, ["light.shadow_test"], {"light.shadow_test": 200})
+    await observer.async_start()
+
+    for brightness in range(EVIDENCE_LEDGER_SIZE + 3):
+        hass.states.async_set("light.shadow_test", "on", {"brightness": brightness + 1})
+        await hass.async_block_till_done()
+
+    diagnostics = hass.states.get(DIAGNOSTIC_ENTITY_ID)
+    assert diagnostics is not None
+    ledger = diagnostics.attributes["recent_evidence"]
+    assert len(ledger) == EVIDENCE_LEDGER_SIZE
+    assert ledger[-1]["entity_id"] == "light.shadow_test"
+    assert ledger[-1]["attribution_source"] == "unattributed_external"
+    assert ledger[-1]["intent"] == "hlm_owned"
+    assert ledger[-1]["allows_homeowner_mutation"] is False
+    assert ledger[-1]["mutated"] is False
+
+    await observer.async_shutdown()
+    await hass.async_block_till_done()

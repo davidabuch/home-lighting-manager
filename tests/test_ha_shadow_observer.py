@@ -380,3 +380,57 @@ async def test_topology_membership_falls_back_to_event_snapshot_when_canonical_h
     assert _member_entity_ids_for_observation(
         hass, "light.aggregate", event_snapshot
     ) == ("light.leaf_one", "light.leaf_two")
+
+
+@pytest.mark.asyncio
+async def test_observer_topology_cache_captures_group_members_at_startup(tmp_path):
+    from homeassistant.core import HomeAssistant, State
+
+    from custom_components.home_lighting_manager.ha_observer import HomeAssistantShadowObserver
+
+    hass = HomeAssistant(str(tmp_path))
+    hass.states.async_set(
+        "light.aggregate",
+        "on",
+        {"entity_id": ["light.leaf_one", "light.leaf_two"]},
+    )
+    observer = HomeAssistantShadowObserver(
+        hass, ["light.aggregate", "light.leaf_one", "light.leaf_two"]
+    )
+    await observer.async_start()
+
+    stripped_event_state = State("light.aggregate", "on", {"brightness": 100})
+    assert observer._member_entity_ids_for_event(
+        "light.aggregate", stripped_event_state
+    ) == ("light.leaf_one", "light.leaf_two")
+
+    await observer.async_shutdown()
+    await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_observer_topology_cache_learns_membership_from_event_fallback(tmp_path):
+    from homeassistant.core import HomeAssistant, State
+
+    from custom_components.home_lighting_manager.ha_observer import HomeAssistantShadowObserver
+
+    hass = HomeAssistant(str(tmp_path))
+    observer = HomeAssistantShadowObserver(hass, ["light.aggregate"])
+    await observer.async_start()
+
+    event_state = State(
+        "light.aggregate",
+        "on",
+        {"group_entities": ["light.leaf_one", "light.leaf_two"]},
+    )
+    assert observer._member_entity_ids_for_event(
+        "light.aggregate", event_state
+    ) == ("light.leaf_one", "light.leaf_two")
+
+    assert observer._topology_members["light.aggregate"] == (
+        "light.leaf_one",
+        "light.leaf_two",
+    )
+
+    await observer.async_shutdown()
+    await hass.async_block_till_done()

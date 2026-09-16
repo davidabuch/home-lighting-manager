@@ -82,6 +82,7 @@ class HomeAssistantShadowObserver:
             window_seconds=EXTERNAL_BURST_WINDOW_SECONDS
         )
         self._external_burst: dict[str, object] | None = None
+        self._topology_members: dict[str, tuple[str, ...]] = {}
 
     async def async_start(self) -> None:
         """Load trusted evidence and begin observation without command authority."""
@@ -102,6 +103,8 @@ class HomeAssistantShadowObserver:
                 family_evidence={},
             )
             self._storage_status = "loaded"
+
+        self._refresh_topology_cache()
 
         # Checkpoint the new authority generation immediately. If Home Assistant crashes before
         # another mutation or clean shutdown, the next process must still advance beyond this one.
@@ -180,8 +183,8 @@ class HomeAssistantShadowObserver:
             is not IntentAttributionSource.UNATTRIBUTED_EXTERNAL
         ):
             return
-        members = _member_entity_ids_for_observation(
-            self.hass, observation.entity_id, new_state
+        members = self._member_entity_ids_for_event(
+            observation.entity_id, new_state
         )
         summary = self._external_correlator.observe(
             ExternalTopologyEvent(
@@ -198,8 +201,8 @@ class HomeAssistantShadowObserver:
     ) -> None:
         """Record a bounded, non-commanding attribution ledger for commissioning."""
         evidence = observation.evidence
-        members = _member_entity_ids_for_observation(
-            self.hass, observation.entity_id, new_state
+        members = self._member_entity_ids_for_event(
+            observation.entity_id, new_state
         )
         self._evidence_ledger.append(
             {
@@ -218,6 +221,42 @@ class HomeAssistantShadowObserver:
                 "reason": decision.reason,
             }
         )
+
+    @callback
+    def _refresh_topology_cache(self) -> None:
+        """Snapshot aggregate membership from stable HA state-machine entries."""
+        cache: dict[str, tuple[str, ...]] = {}
+        for entity_id in self.entity_ids:
+            state = self.hass.states.get(entity_id)
+            if state is None:
+                continue
+            members = _member_entity_ids(state)
+            if members:
+                cache[entity_id] = members
+        self._topology_members = cache
+
+    @callback
+    def _member_entity_ids_for_event(
+        self, entity_id: str, event_state: State
+    ) -> tuple[str, ...]:
+        """Resolve event topology from the startup cache, then safe fallbacks."""
+        cached = self._topology_members.get(entity_id)
+        if cached:
+            return cached
+
+        members = _member_entity_ids(event_state)
+        if members:
+            self._topology_members[entity_id] = members
+            return members
+
+        current = self.hass.states.get(entity_id)
+        if current is not None:
+            members = _member_entity_ids(current)
+            if members:
+                self._topology_members[entity_id] = members
+                return members
+
+        return ()
 
     @callback
     def _handle_nightly_boundary(self, _now: datetime) -> None:

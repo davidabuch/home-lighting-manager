@@ -512,3 +512,72 @@ async def test_started_event_refresh_does_not_change_command_authority(tmp_path)
 
     await observer.async_shutdown()
     await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_delayed_topology_refresh_populates_late_membership(tmp_path):
+    from datetime import datetime
+
+    from homeassistant.core import HomeAssistant
+
+    from custom_components.home_lighting_manager.ha_observer import (
+        DIAGNOSTIC_ENTITY_ID,
+        HomeAssistantShadowObserver,
+    )
+
+    hass = HomeAssistant(str(tmp_path))
+    observer = HomeAssistantShadowObserver(
+        hass,
+        ["light.aggregate", "light.leaf_one", "light.leaf_two"],
+    )
+    await observer.async_start()
+
+    assert observer._topology_members == {}
+
+    hass.states.async_set(
+        "light.aggregate",
+        "on",
+        {
+            "entity_id": [
+                "light.leaf_one",
+                "light.leaf_two",
+            ]
+        },
+    )
+
+    observer._delayed_topology_refresh(datetime.now().astimezone())
+
+    assert observer._topology_members["light.aggregate"] == (
+        "light.leaf_one",
+        "light.leaf_two",
+    )
+
+    health = hass.states.get(DIAGNOSTIC_ENTITY_ID)
+    assert health is not None
+    assert health.attributes["topology_cache_ready"] is True
+    assert health.attributes["topology_aggregate_count"] == 1
+    assert health.attributes["topology_member_count"] == 2
+
+    await observer.async_shutdown()
+    await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_topology_cache_ready_false_when_no_memberships_exist(tmp_path):
+    from homeassistant.core import HomeAssistant
+
+    from custom_components.home_lighting_manager.ha_observer import (
+        DIAGNOSTIC_ENTITY_ID,
+        HomeAssistantShadowObserver,
+    )
+
+    hass = HomeAssistant(str(tmp_path))
+    observer = HomeAssistantShadowObserver(hass, ["light.leaf"])
+    await observer.async_start()
+
+    health = hass.states.get(DIAGNOSTIC_ENTITY_ID)
+    assert health is not None
+    assert health.attributes["topology_cache_ready"] is False
+
+    await observer.async_shutdown()
+    await hass.async_block_till_done()

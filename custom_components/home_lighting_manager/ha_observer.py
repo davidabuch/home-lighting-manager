@@ -21,7 +21,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import Context, Event, HomeAssistant, State, callback
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.event import async_track_time_change
+from homeassistant.helpers.event import async_call_later, async_track_time_change
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
@@ -270,7 +270,22 @@ class HomeAssistantShadowObserver:
         self.hass.async_create_task(self.async_save())
 
     async def _async_started_event(self, _event: Event) -> None:
-        """Refresh topology once Home Assistant startup has fully completed."""
+        """Refresh topology after HA startup and schedule bounded late retries."""
+        self._refresh_topology_cache()
+        self._publish_diagnostics()
+
+        for delay in (5, 15, 30):
+            self._unsubscribers.append(
+                async_call_later(
+                    self.hass,
+                    delay,
+                    self._delayed_topology_refresh,
+                )
+            )
+
+    @callback
+    def _delayed_topology_refresh(self, _now: datetime) -> None:
+        """Refresh topology after integrations finish late startup work."""
         self._refresh_topology_cache()
         self._publish_diagnostics()
 
@@ -302,6 +317,7 @@ class HomeAssistantShadowObserver:
                 len(members) for members in self._topology_members.values()
             ),
             "topology_aggregate_entities": sorted(self._topology_members)[:32],
+            "topology_cache_ready": bool(self._topology_members),
         }
         if self._last_decision is not None:
             attrs.update(

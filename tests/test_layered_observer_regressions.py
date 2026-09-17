@@ -20,6 +20,17 @@ async def observer_for(tmp_path, entities):
     return hass, observer
 
 
+async def seed_group(hass, entity_id, members, *, state="off"):
+    """Publish known topology without creating external homeowner evidence."""
+    hass.states.async_set(
+        entity_id,
+        state,
+        {"entity_id": list(members)},
+        context=Context(parent_id="topology-seed"),
+    )
+    await hass.async_block_till_done()
+
+
 @pytest.mark.asyncio
 async def test_late_external_qualification_cannot_replace_newer_direct_user_intent(tmp_path):
     leaf, group = "light.path_1", "light.path_group"
@@ -114,6 +125,194 @@ async def test_qualified_external_first_off_still_releases_manual_and_no_service
             assert observer.runtime.engine.resolve(leaf).layer is None
             attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
             assert attrs["latest_homeowner_operation"]["reason"] == "released_manual"
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_preknown_unique_exact_group_promotes_one_shared_manual_operation(tmp_path):
+    left, right = "light.kitchen_left", "light.kitchen_right"
+    exact, larger = "light.kitchen_cabinets", "light.kitchen"
+    hass, observer = await observer_for(tmp_path, [left, right, exact, larger])
+    try:
+        await seed_group(hass, exact, (left, right))
+        await seed_group(hass, larger, (left, right, "light.kitchen_other"))
+
+        hass.states.async_set(left, "on", {"brightness": 120})
+        await hass.async_block_till_done()
+        hass.states.async_set(right, "on", {"brightness": 210})
+        await hass.async_block_till_done()
+        hass.states.async_set(exact, "on", {"entity_id": [left, right]})
+        await hass.async_block_till_done()
+
+        assert len(observer.runtime.operations.history) == 1
+        latest = observer.runtime.operations.latest_homeowner
+        assert latest["group_id"] == exact
+        assert latest["affected"] == (left, right)
+        left_layer = observer.runtime.engine.resolve(left).layer
+        right_layer = observer.runtime.engine.resolve(right).layer
+        assert left_layer.kind is LayerKind.MANUAL
+        assert right_layer.kind is LayerKind.MANUAL
+        assert left_layer.group_id == right_layer.group_id == exact
+        assert left_layer.operation_id == right_layer.operation_id
+        assert observer.runtime.engine.resolve(left).appearance.brightness == 120
+        assert observer.runtime.engine.resolve(right).appearance.brightness == 210
+
+        attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
+        candidate = attrs["external_burst"]["external_intent_candidate"]
+        assert candidate["qualified"] is True
+        assert candidate["group_id"] == exact
+        assert candidate["basis"] == "unique_exact_group_with_aggregate_propagation"
+        assert candidate["promoted_to_homeowner"] is True
+        assert attrs["command_authority"] is False
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_exact_group_first_off_releases_then_second_off_creates_manual_off(tmp_path):
+    left, right, group = "light.left", "light.right", "light.group"
+    hass, observer = await observer_for(tmp_path, [left, right, group])
+    try:
+        await seed_group(hass, group, (left, right))
+        for entity, brightness in ((left, 100), (right, 180)):
+            hass.states.async_set(entity, "on", {"brightness": brightness})
+            await hass.async_block_till_done()
+        hass.states.async_set(group, "on", {"entity_id": [left, right]})
+        await hass.async_block_till_done()
+        assert all(
+            observer.runtime.engine.resolve(entity).layer.kind is LayerKind.MANUAL
+            for entity in (left, right)
+        )
+
+        for entity in (left, right):
+            hass.states.async_set(entity, "off")
+            await hass.async_block_till_done()
+        hass.states.async_set(group, "off", {"entity_id": [left, right]})
+        await hass.async_block_till_done()
+        assert observer.runtime.operations.latest_homeowner["reason"] == "released_to_hlm"
+        assert all(observer.runtime.engine.resolve(entity).layer is None for entity in (left, right))
+
+        # Simulate HLM/automatic physical reassertion without changing ownership.
+        for entity in (left, right):
+            hass.states.async_set(entity, "on", context=Context(parent_id="hlm-reassert"))
+            await hass.async_block_till_done()
+        hass.states.async_set(
+            group,
+            "on",
+            {"entity_id": [left, right]},
+            context=Context(parent_id="hlm-reassert"),
+        )
+        await hass.async_block_till_done()
+
+        for entity in (left, right):
+            hass.states.async_set(entity, "off")
+            await hass.async_block_till_done()
+        hass.states.async_set(group, "off", {"entity_id": [left, right]})
+        await hass.async_block_till_done()
+        assert observer.runtime.operations.latest_homeowner["reason"] == "created_group_manual_off"
+        assert all(
+            observer.runtime.engine.resolve(entity).layer.kind is LayerKind.MANUAL_OFF
+            for entity in (left, right)
+        )
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_preknown_exact_groups_remain_ambiguous(tmp_path):
+    left, right = "light.left", "light.right"
+    group_a, group_b = "light.group_a", "light.group_b"
+    hass, observer = await observer_for(tmp_path, [left, right, group_a, group_b])
+    try:
+        await seed_group(hass, group_a, (left, right))
+        await seed_group(hass, group_b, (left, right))
+        hass.states.async_set(left, "on", {"brightness": 100})
+        await hass.async_block_till_done()
+        hass.states.async_set(right, "on", {"brightness": 100})
+        await hass.async_block_till_done()
+        hass.states.async_set(group_a, "on", {"entity_id": [left, right]})
+        await hass.async_block_till_done()
+        hass.states.async_set(group_b, "on", {"entity_id": [left, right]})
+        await hass.async_block_till_done()
+
+        assert not observer.runtime.operations.history
+        attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
+        assert not attrs["external_burst"]["external_intent_candidate"]["qualified"]
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_exact_group_does_not_promote_when_extra_leaf_is_in_same_burst(tmp_path):
+    left, right, extra = "light.left", "light.right", "light.extra"
+    group = "light.group"
+    hass, observer = await observer_for(tmp_path, [left, right, extra, group])
+    try:
+        await seed_group(hass, group, (left, right))
+        for entity in (left, right, extra):
+            hass.states.async_set(entity, "on", {"brightness": 100})
+            await hass.async_block_till_done()
+        hass.states.async_set(group, "on", {"entity_id": [left, right]})
+        await hass.async_block_till_done()
+        assert not observer.runtime.operations.history
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_exact_group_mixed_member_operations_fail_closed(tmp_path):
+    left, right, group = "light.left", "light.right", "light.group"
+    hass, observer = await observer_for(tmp_path, [left, right, group])
+    try:
+        await seed_group(hass, group, (left, right))
+        hass.states.async_set(left, "on", {"brightness": 100})
+        await hass.async_block_till_done()
+        hass.states.async_set(right, "off")
+        await hass.async_block_till_done()
+        hass.states.async_set(group, "on", {"entity_id": [left, right]})
+        await hass.async_block_till_done()
+
+        assert not observer.runtime.operations.history
+        attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
+        candidate = attrs["external_burst"]["external_intent_candidate"]
+        assert candidate["qualified"] is True
+        assert candidate["promoted_to_homeowner"] is False
+        assert "mixed member operations" in candidate["promotion_reason"]
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_late_exact_group_cannot_overwrite_newer_direct_member_intent(tmp_path):
+    left, right, group = "light.left", "light.right", "light.group"
+    hass, observer = await observer_for(tmp_path, [left, right, group])
+    try:
+        await seed_group(hass, group, (left, right))
+        hass.states.async_set(left, "on", {"brightness": 80})
+        await hass.async_block_till_done()
+        hass.states.async_set(right, "on", {"brightness": 80})
+        await hass.async_block_till_done()
+        hass.states.async_set(
+            left,
+            "on",
+            {"brightness": 220},
+            context=Context(user_id="user"),
+        )
+        await hass.async_block_till_done()
+        hass.states.async_set(group, "on", {"entity_id": [left, right]})
+        await hass.async_block_till_done()
+
+        assert observer.runtime.engine.resolve(left).appearance.brightness == 220
+        assert observer.runtime.engine.resolve(right).layer is None
+        attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
+        assert "stale successful intent" in attrs["latest_operation_rejection"]["reason"]
     finally:
         await observer.async_shutdown()
         await hass.async_block_till_done()

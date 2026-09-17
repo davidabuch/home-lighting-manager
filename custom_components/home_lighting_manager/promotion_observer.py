@@ -1,8 +1,8 @@
 """Shadow homeowner promotion for qualified external topology evidence.
 
-This adapter extends the commissioned observation-only HA observer. It may promote a qualified
-context-less external leaf event into shadow homeowner intent, but it never calls Home Assistant
-services or commands a light.
+This adapter extends the commissioned observation-only HA observer. It may promote qualified
+context-less external leaf or exact-group evidence into shadow homeowner intent, but it never
+calls Home Assistant services or commands a light.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from datetime import datetime
 from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.util import dt as dt_util
 
+from .attribution_correlation import ExternalBurstTopology, resolve_unique_exact_group
 from .ha_observer import EXTERNAL_BURST_WINDOW_SECONDS, HomeAssistantShadowObserver
 from .intent_policy import (
     IntentAttributionSource,
@@ -20,6 +21,7 @@ from .intent_policy import (
     IntentEvidence,
     IntentEvidenceKind,
 )
+from .operations import HomeownerOperation, MemberOutcome, OperationResult
 from .shadow import ShadowDecision, ShadowObservation
 
 
@@ -33,7 +35,7 @@ class _PendingExternalLeaf:
 
 
 class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
-    """Promote only qualified external leaf correlation into shadow Manual ownership."""
+    """Promote only qualified external leaf or exact-group correlation into shadow ownership."""
 
     def __init__(
         self,
@@ -45,13 +47,22 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         self._pending_external_leaves: dict[str, _PendingExternalLeaf] = {}
         self._last_external_promotion_key: tuple[int | None, str] | None = None
         self._last_external_promotion_outcome: dict[str, object] | None = None
+        self._last_external_group_promotion_key: tuple[
+            str, str, tuple[tuple[str, int], ...]
+        ] | None = None
+        self._last_external_group_promotion_outcome: dict[str, object] | None = None
+        self._external_group_burst_topology: dict[str, tuple[str, ...]] = {}
+        self._external_group_last_observed_at: datetime | None = None
 
     @callback
     def _record_external_topology(
         self, observation: ShadowObservation, new_state: State
     ) -> None:
-        """Correlate external topology, then promote a qualified leaf at most once per burst."""
-        if observation.evidence.kind is IntentEvidenceKind.AVAILABILITY_CHANGE or observation.evidence.has_parent_id:
+        """Correlate external topology, then promote only qualified exact intent."""
+        if (
+            observation.evidence.kind is IntentEvidenceKind.AVAILABILITY_CHANGE
+            or observation.evidence.has_parent_id
+        ):
             self._pending_external_leaves.pop(observation.entity_id, None)
         if (
             observation.evidence.attribution_source
@@ -61,6 +72,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             return
 
         observed_at = dt_util.now()
+        self._snapshot_group_topology_for_burst(observed_at)
         members = self._member_entity_ids_for_event(observation.entity_id, new_state)
         if (
             not members
@@ -81,12 +93,38 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             return
 
         candidate = burst.get("external_intent_candidate")
-        if not isinstance(candidate, dict) or candidate.get("qualified") is not True:
+        if not isinstance(candidate, dict):
             return
+        if candidate.get("qualified") is True:
+            self._promote_single_candidate(candidate, members)
+            return
+        self._promote_exact_group_candidate(
+            burst,
+            candidate,
+            current_entity_id=observation.entity_id,
+            burst_topology=self._external_group_burst_topology,
+        )
 
+    @callback
+    def _snapshot_group_topology_for_burst(self, observed_at: datetime) -> None:
+        """Freeze exact-group authority at burst start so new telemetry cannot self-qualify."""
+        previous = self._external_group_last_observed_at
+        if previous is None:
+            new_burst = True
+        else:
+            delta = (observed_at - previous).total_seconds()
+            new_burst = delta < 0 or delta > EXTERNAL_BURST_WINDOW_SECONDS
+        if new_burst:
+            self._external_group_burst_topology = dict(self._topology_members)
+        self._external_group_last_observed_at = observed_at
+
+    @callback
+    def _promote_single_candidate(
+        self, candidate: dict[str, object], members: tuple[str, ...]
+    ) -> None:
+        """Preserve the commissioned single-leaf promotion path unchanged."""
         entity_id = candidate.get("entity_id")
-        started_at = burst.get("started_at")
-        if not isinstance(entity_id, str) or not isinstance(started_at, str):
+        if not isinstance(entity_id, str):
             return
 
         # A later leaf command needs fresh aggregate corroboration. Reusing the burst start
@@ -102,7 +140,6 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             candidate.update(self._last_external_promotion_outcome)
             return
 
-        pending = self._pending_external_leaves.get(entity_id)
         if pending is None:
             candidate.update(
                 {
@@ -115,14 +152,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
 
         promoted_observation = ShadowObservation(
             entity_id=pending.observation.entity_id,
-            evidence=IntentEvidence(
-                kind=IntentEvidenceKind.CORRELATED_EXTERNAL_HOMEOWNER_COMMAND,
-                succeeded=True,
-                attribution_coherent=True,
-                attribution_source=IntentAttributionSource.UNATTRIBUTED_EXTERNAL,
-                has_user_id=False,
-                has_parent_id=False,
-            ),
+            evidence=_correlated_homeowner_evidence(),
             appearance=pending.observation.appearance,
             operation=pending.observation.operation,
             manual_precedence=pending.observation.manual_precedence,
@@ -142,6 +172,144 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             self.hass.async_create_task(self.async_save())
 
     @callback
+    def _promote_exact_group_candidate(
+        self,
+        burst: dict[str, object],
+        candidate: dict[str, object],
+        *,
+        current_entity_id: str,
+        burst_topology: dict[str, tuple[str, ...]],
+    ) -> None:
+        """Promote only one pre-known, uniquely identifiable exact aggregate operation."""
+        if (
+            burst.get("topology")
+            != ExternalBurstTopology.MULTI_LEAF_WITH_AGGREGATE_PROPAGATION.value
+        ):
+            return
+        leaf_entities = _string_tuple(burst.get("leaf_entities"))
+        aggregate_entities = _string_tuple(burst.get("aggregate_entities"))
+        if len(leaf_entities) < 2:
+            return
+
+        group_id = resolve_unique_exact_group(
+            leaf_entities=leaf_entities,
+            observed_aggregate_entities=aggregate_entities,
+            topology_members=burst_topology,
+        )
+        # The uniquely exact group must itself be the corroborating event. A
+        # containing/nested aggregate arriving later cannot retroactively choose it.
+        if group_id is None or group_id != current_entity_id:
+            return
+
+        candidate.update(
+            {
+                "qualified": True,
+                "entity_id": None,
+                "group_id": group_id,
+                "basis": "unique_exact_group_with_aggregate_propagation",
+            }
+        )
+        pending = [self._pending_external_leaves.get(entity_id) for entity_id in leaf_entities]
+        if any(item is None for item in pending):
+            candidate.update(
+                {
+                    "promoted_to_homeowner": False,
+                    "manual_ownership_recorded": False,
+                    "promotion_reason": "qualified exact group lacked retained member observation",
+                }
+            )
+            return
+        retained = tuple(item for item in pending if item is not None)
+
+        kinds = {item.observation.operation for item in retained}
+        if len(kinds) != 1 or not kinds <= {"appearance", "off"}:
+            candidate.update(
+                {
+                    "promoted_to_homeowner": False,
+                    "manual_ownership_recorded": False,
+                    "promotion_reason": "qualified exact group had mixed member operations",
+                }
+            )
+            return
+        kind = next(iter(kinds))
+        if kind == "appearance" and any(
+            item.observation.appearance is None for item in retained
+        ):
+            candidate.update(
+                {
+                    "promoted_to_homeowner": False,
+                    "manual_ownership_recorded": False,
+                    "promotion_reason": "qualified exact group had incomplete member appearance",
+                }
+            )
+            return
+
+        sequences = [item.observation.sequence for item in retained]
+        generations = {item.observation.generation for item in retained}
+        if any(type(sequence) is not int for sequence in sequences) or len(generations) != 1:
+            candidate.update(
+                {
+                    "promoted_to_homeowner": False,
+                    "manual_ownership_recorded": False,
+                    "promotion_reason": "qualified exact group lacked coherent ingress identity",
+                }
+            )
+            return
+        generation = next(iter(generations))
+        if type(generation) is not int:
+            return
+
+        oldest = min(item.observed_at for item in retained)
+        newest = max(item.observed_at for item in retained)
+        age = (newest - oldest).total_seconds()
+        if age < 0 or age > EXTERNAL_BURST_WINDOW_SECONDS:
+            return
+
+        sequence_pairs = tuple(
+            sorted(
+                (item.observation.entity_id, int(item.observation.sequence))
+                for item in retained
+            )
+        )
+        promotion_key = (group_id, kind, sequence_pairs)
+        if (
+            promotion_key == self._last_external_group_promotion_key
+            and self._last_external_group_promotion_outcome is not None
+        ):
+            candidate.update(self._last_external_group_promotion_outcome)
+            return
+
+        # Use the earliest member ingress sequence. If a newer direct homeowner
+        # intent arrived on any member while this group was still correlating, the
+        # core stale-intent guard rejects this inferred operation atomically.
+        sequence = min(int(item.observation.sequence) for item in retained)
+        operation = HomeownerOperation(
+            operation_id=f"external-group:{generation}:{sequence}",
+            sequence=sequence,
+            generation=generation,
+            kind=kind,
+            evidence=_correlated_homeowner_evidence(),
+            members=tuple(
+                MemberOutcome(
+                    item.observation.entity_id,
+                    appearance=item.observation.appearance,
+                    manual_precedence=item.observation.manual_precedence,
+                )
+                for item in retained
+            ),
+            group_id=group_id,
+            require_legacy_policy=True,
+        )
+        result = self.runtime.observe_operation(operation)
+        outcome = _promotion_outcome(result)
+        candidate.update(outcome)
+        self._last_external_group_promotion_key = promotion_key
+        self._last_external_group_promotion_outcome = outcome
+
+        if result.mutated:
+            self.hass.async_create_task(self.async_save())
+
+    @callback
     def _prune_pending_external_leaves(self, now: datetime) -> None:
         """Bound retained leaf evidence to the same short window as burst correlation."""
         stale = [
@@ -154,7 +322,24 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             self._pending_external_leaves.pop(entity_id, None)
 
 
-def _promotion_outcome(decision: ShadowDecision) -> dict[str, object]:
+def _correlated_homeowner_evidence() -> IntentEvidence:
+    return IntentEvidence(
+        kind=IntentEvidenceKind.CORRELATED_EXTERNAL_HOMEOWNER_COMMAND,
+        succeeded=True,
+        attribution_coherent=True,
+        attribution_source=IntentAttributionSource.UNATTRIBUTED_EXTERNAL,
+        has_user_id=False,
+        has_parent_id=False,
+    )
+
+
+def _string_tuple(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        return ()
+    return tuple(sorted(set(value)))
+
+
+def _promotion_outcome(decision: ShadowDecision | OperationResult) -> dict[str, object]:
     """Expose intent promotion separately from actual Manual-layer mutation."""
     return {
         "promoted_to_homeowner": (

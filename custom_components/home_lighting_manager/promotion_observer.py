@@ -84,6 +84,10 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             )
         self._prune_pending_external_leaves(observed_at)
 
+        # Exact-group qualification may use only topology already known before this
+        # event. Learning a new aggregate during the same burst is insufficient proof
+        # that it was the homeowner-commanded scope.
+        topology_before_event = dict(self._topology_members)
         super()._record_external_topology(observation, new_state)
         burst = self._external_burst
         if not isinstance(burst, dict):
@@ -95,7 +99,12 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         if candidate.get("qualified") is True:
             self._promote_single_candidate(candidate, members)
             return
-        self._promote_exact_group_candidate(burst, candidate)
+        self._promote_exact_group_candidate(
+            burst,
+            candidate,
+            current_entity_id=observation.entity_id,
+            topology_before_event=topology_before_event,
+        )
 
     @callback
     def _promote_single_candidate(
@@ -152,9 +161,14 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
 
     @callback
     def _promote_exact_group_candidate(
-        self, burst: dict[str, object], candidate: dict[str, object]
+        self,
+        burst: dict[str, object],
+        candidate: dict[str, object],
+        *,
+        current_entity_id: str,
+        topology_before_event: dict[str, tuple[str, ...]],
     ) -> None:
-        """Promote only one uniquely identifiable exact multi-leaf aggregate operation."""
+        """Promote only one pre-known, uniquely identifiable exact aggregate operation."""
         if (
             burst.get("topology")
             != ExternalBurstTopology.MULTI_LEAF_WITH_AGGREGATE_PROPAGATION.value
@@ -168,9 +182,11 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         group_id = resolve_unique_exact_group(
             leaf_entities=leaf_entities,
             observed_aggregate_entities=aggregate_entities,
-            topology_members=self._topology_members,
+            topology_members=topology_before_event,
         )
-        if group_id is None:
+        # The uniquely exact group must itself be the corroborating event. A
+        # containing/nested aggregate arriving later cannot retroactively choose it.
+        if group_id is None or group_id != current_entity_id:
             return
 
         candidate.update(
@@ -251,6 +267,9 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             candidate.update(self._last_external_group_promotion_outcome)
             return
 
+        # Use the earliest member ingress sequence. If a newer direct homeowner
+        # intent arrived on any member while this group was still correlating, the
+        # core stale-intent guard rejects this inferred operation atomically.
         sequence = min(int(item.observation.sequence) for item in retained)
         operation = HomeownerOperation(
             operation_id=f"external-group:{generation}:{sequence}",

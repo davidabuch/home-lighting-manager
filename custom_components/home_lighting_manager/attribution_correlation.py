@@ -7,6 +7,7 @@ promote an observation to homeowner intent or command any Home Assistant entity.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
@@ -55,6 +56,8 @@ class ExternalBurstSummary:
         This is deliberately diagnostic only. A qualified candidate is not
         homeowner intent and must not mutate ownership. It simply records that
         one context-less leaf change is corroborated by aggregate propagation.
+        Multi-leaf qualification requires exact group topology and is resolved
+        by the HA adapter against its live topology cache.
         """
         qualified = (
             self.topology is ExternalBurstTopology.LEAF_WITH_AGGREGATE_PROPAGATION
@@ -85,6 +88,33 @@ class ExternalBurstSummary:
             "propagated_leaf_entities": list(self.propagated_leaf_entities[:32]),
             "external_intent_candidate": self.external_intent_candidate(),
         }
+
+
+def resolve_unique_exact_group(
+    *,
+    leaf_entities: tuple[str, ...],
+    observed_aggregate_entities: tuple[str, ...],
+    topology_members: Mapping[str, tuple[str, ...]],
+) -> str | None:
+    """Return one uniquely identifiable exact aggregate, otherwise fail closed.
+
+    Exact means direct membership equals the observed leaf set. Uniqueness is
+    evaluated across the complete known topology, not only aggregates that emitted
+    state during the burst. The winning aggregate must also have appeared in the
+    burst. This prevents a nested/larger aggregate or duplicate exact groups from
+    being guessed as homeowner scope.
+    """
+    if len(leaf_entities) < 2:
+        return None
+    leaf_set = frozenset(leaf_entities)
+    exact = sorted(
+        aggregate
+        for aggregate, members in topology_members.items()
+        if len(members) == len(leaf_set) and frozenset(members) == leaf_set
+    )
+    if len(exact) != 1:
+        return None
+    return exact[0] if exact[0] in set(observed_aggregate_entities) else None
 
 
 class ExternalBurstCorrelator:

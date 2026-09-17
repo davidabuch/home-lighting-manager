@@ -1,0 +1,152 @@
+{
+  "version": 1,
+  "minor_version": 1,
+  "key": "home_lighting_manager.shadow",
+  "data": {
+    "version": 1,
+    "layers": [
+      {
+        "entity_id": "light.off",
+        "layer": {
+          "layer_id": "shadow-manual:7:light.off",
+          "owner": "manual",
+          "kind": "manual_off",
+          "generation": 7,
+          "order": 1,
+          "appearance": {
+            "on": false,
+            "brightness": null,
+            "color_temp_kelvin": null,
+            "xy_color": null,
+            "rgb_color": null,
+            "hs_color": null,
+            "effect": null,
+            "scene_id": null
+          },
+          "family": null,
+          "session_id": null,
+          "expires_at_boundary": "nightly_0159",
+          "precedence": 250,
+          "metadata": {
+            "shadow": true
+          }
+        }
+      },
+      {
+        "entity_id": "light.partial",
+        "layer": {
+          "layer_id": "shadow-manual:7:light.partial",
+          "owner": "manual",
+          "kind": "manual",
+          "generation": 7,
+          "order": 1,
+          "appearance": {
+            "on": true,
+            "brightness": null,
+            "color_temp_kelvin": null,
+            "xy_color": null,
+            "rgb_color": null,
+            "hs_color": null,
+            "effect": null,
+            "scene_id": null
+          },
+          "family": null,
+          "session_id": null,
+          "expires_at_boundary": "nightly_0159",
+          "precedence": 250,
+          "metadata": {
+            "shadow": true
+          }
+        }
+      },
+      {
+        "entity_id": "light.removed",
+        "layer": {
+          "layer_id": "shadow-manual:7:light.removed",
+          "owner": "manual",
+          "kind": "manual",
+          "generation": 7,
+          "order": 1,
+          "appearance": {
+            "on": true,
+            "brightness": 123,
+            "color_temp_kelvin": null,
+            "xy_color": null,
+            "rgb_color": null,
+            "hs_color": null,
+            "effect": null,
+            "scene_id": null
+          },
+          "family": null,
+          "session_id": null,
+          "expires_at_boundary": "nightly_0159",
+          "precedence": 250,
+          "metadata": {
+            "shadow": true
+          }
+        }
+      },
+      {
+        "entity_id": "light.safe",
+        "layer": {
+          "layer_id": "shadow-manual:7:light.safe",
+          "owner": "manual",
+          "kind": "manual",
+          "generation": 7,
+          "order": 1,
+          "appearance": {
+            "on": true,
+            "brightness": 123,
+            "color_temp_kelvin": null,
+            "xy_color": null,
+            "rgb_color": [
+              1,
+              2,
+              3
+            ],
+            "hs_color": null,
+            "effect": null,
+            "scene_id": null
+          },
+          "family": null,
+          "session_id": null,
+          "expires_at_boundary": "nightly_0159",
+          "precedence": 250,
+          "metadata": {
+            "shadow": true
+          }
+        }
+      },
+      {
+        "entity_id": "light.unavailable",
+        "layer": {
+          "layer_id": "shadow-manual:7:light.unavailable",
+          "owner": "manual",
+          "kind": "manual_off",
+          "generation": 7,
+          "order": 1,
+          "appearance": {
+            "on": false,
+            "brightness": null,
+            "color_temp_kelvin": null,
+            "xy_color": null,
+            "rgb_color": null,
+            "hs_color": null,
+            "effect": null,
+            "scene_id": null
+          },
+          "family": null,
+          "session_id": null,
+          "expires_at_boundary": "nightly_0159",
+          "precedence": 250,
+          "metadata": {
+            "shadow": true
+          }
+        }
+      }
+    ],
+    "suppressed_sessions": [],
+    "generation": 7,
+    "saved_at": "2026-09-17T12:00:00-07:00"
+  }
+}

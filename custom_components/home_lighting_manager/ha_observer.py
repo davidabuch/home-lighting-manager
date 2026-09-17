@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Iterable, Mapping
+from dataclasses import replace
 from datetime import datetime, time, timedelta
 from typing import Any
 
@@ -27,14 +28,14 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .attribution_correlation import ExternalBurstCorrelator, ExternalTopologyEvent
-from .engine import NIGHTLY_BOUNDARY
+from .engine import MAX_ENTITIES, NIGHTLY_BOUNDARY
 from .intent_policy import (
     IntentAttributionSource,
     IntentEvidence,
     IntentEvidenceKind,
 )
 from .model import Appearance, LayerKind, OwnershipLayer
-from .persistence import STORAGE_VERSION, deserialize_state
+from .persistence import STORE_ENVELOPE_VERSION, deserialize_state
 from .recovery import ManualRecoveryEvidence
 from .shadow import ShadowDecision, ShadowObservation, ShadowRuntime
 
@@ -51,7 +52,7 @@ CONFIG_SCHEMA = vol.Schema(
     {
         DOMAIN: vol.Schema(
             {
-                vol.Required(CONF_SHADOW_ENTITIES): cv.entity_ids,
+                vol.Required(CONF_SHADOW_ENTITIES): vol.All(cv.entity_ids, vol.Length(max=MAX_ENTITIES)),
                 vol.Optional(CONF_MANUAL_PRECEDENCE, default={}): {
                     cv.entity_id: vol.All(vol.Coerce(int), vol.Range(min=0)),
                 },
@@ -71,11 +72,13 @@ class HomeAssistantShadowObserver:
         entity_ids: list[str],
         manual_precedence: dict[str, int] | None = None,
     ) -> None:
+        if len(set(entity_ids)) > MAX_ENTITIES:
+            raise ValueError("shadow entity capacity exceeded")
         self.hass = hass
         self.entity_ids = frozenset(entity_ids)
         self.manual_precedence = dict(manual_precedence or {})
-        self.store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, STORAGE_KEY)
-        self.runtime = ShadowRuntime(generation=1)
+        self.store: Store[dict[str, Any]] = Store(hass, STORE_ENVELOPE_VERSION, STORAGE_KEY)
+        self.runtime = ShadowRuntime(generation=1, managed_entities=self.entity_ids)
         self._unsubscribers: list[Any] = []
         self._last_decision: ShadowDecision | None = None
         self._storage_status = "empty"
@@ -90,7 +93,7 @@ class HomeAssistantShadowObserver:
         """Load trusted evidence and begin observation without command authority."""
         raw = await self.store.async_load()
         generation = _next_generation(raw)
-        self.runtime = ShadowRuntime(generation=generation)
+        self.runtime = ShadowRuntime(generation=generation, managed_entities=self.entity_ids)
 
         if isinstance(raw, dict):
             persisted = deserialize_state(raw)
@@ -172,6 +175,15 @@ class HomeAssistantShadowObserver:
         if observation is None:
             return
 
+        if self._member_entity_ids_for_event(entity_id, new_state):
+            observation = replace(observation, evidence=replace(
+                observation.evidence, kind=IntentEvidenceKind.UNKNOWN, attribution_coherent=False
+            ))  # Aggregate telemetry is not an explicit group-operation receipt.
+        observation = replace(
+            observation,
+            sequence=self.runtime.reserve_sequence(),
+            generation=self.runtime.engine.generation,
+        )
         self._last_decision = self.runtime.observe(observation)
         self._record_external_topology(observation, new_state)
         self._record_evidence(observation, self._last_decision, new_state)
@@ -331,6 +343,7 @@ class HomeAssistantShadowObserver:
             "topology_aggregate_entities": sorted(self._topology_members)[:32],
             "topology_cache_ready": bool(self._topology_members),
         }
+        attrs.update(self.runtime.ownership_diagnostics())
         if self._last_decision is not None:
             attrs.update(
                 {
@@ -382,8 +395,13 @@ def observation_from_state_change(
         has_parent_id=has_parent_id,
     )
 
+    # A repeated state report with the same direct-user context is the same receipt,
+    # not a second OFF. Context-less external receipts retain correlation identity.
+    operation_id = f"ha:{context.id}:{entity_id}" if explicit_user else None
     if new_state.state == STATE_OFF:
-        return ShadowObservation(entity_id=entity_id, evidence=evidence, operation="off")
+        return ShadowObservation(
+            entity_id=entity_id, evidence=evidence, operation="off", operation_id=operation_id
+        )
     if new_state.state != STATE_ON:
         return None
 
@@ -392,6 +410,7 @@ def observation_from_state_change(
         evidence=evidence,
         appearance=_appearance_from_state(new_state),
         operation="appearance",
+        operation_id=operation_id,
         manual_precedence=manual_precedence,
     )
 
@@ -447,6 +466,7 @@ def _appearance_from_state(state: State) -> Appearance:
     attrs = state.attributes
     return Appearance(
         on=True,
+        color_mode=attrs.get("color_mode") if isinstance(attrs.get("color_mode"), str) else None,
         brightness=_optional_int(attrs.get("brightness")),
         color_temp_kelvin=_optional_int(attrs.get("color_temp_kelvin")),
         xy_color=_optional_tuple(attrs.get("xy_color"), 2),
@@ -504,7 +524,7 @@ def _manual_recovery_evidence(
 ) -> dict[str, ManualRecoveryEvidence]:
     """Build conservative restart evidence from persisted intent and current HA truth."""
     evidence: dict[str, ManualRecoveryEvidence] = {}
-    if saved_at is None:
+    if saved_at is None or saved_at > now:
         return evidence
 
     crossed_boundary = _crossed_nightly_boundary(saved_at, now)
@@ -542,6 +562,20 @@ def _state_matches_persisted_layer(state: State | None, layer: OwnershipLayer) -
         return appearance.on is False
 
     attrs = state.attributes
+    # A saved ON-only record cannot reconstruct a currently color-capable light's appearance.
+    current_mode = attrs.get("color_mode")
+    if attrs.get("brightness") is not None and appearance.brightness is None:
+        return False
+    color_fields = ("color_temp_kelvin", "xy_color", "rgb_color", "hs_color")
+    if (any(attrs.get(field) is not None for field in color_fields)
+            and not any(getattr(appearance, field) is not None for field in color_fields)):
+        return False
+    required = {"brightness": "brightness", "color_temp": "color_temp_kelvin",
+                "xy": "xy_color", "rgb": "rgb_color", "hs": "hs_color"}
+    if current_mode in required and getattr(appearance, required[current_mode]) is None:
+        return False
+    if appearance.color_mode is not None and current_mode != appearance.color_mode:
+        return False
     if appearance.brightness is not None and attrs.get("brightness") != appearance.brightness:
         return False
     if (
@@ -549,7 +583,7 @@ def _state_matches_persisted_layer(state: State | None, layer: OwnershipLayer) -
         and attrs.get("color_temp_kelvin") != appearance.color_temp_kelvin
     ):
         return False
-    if appearance.rgb_color is not None and tuple(attrs.get("rgb_color", ())) != appearance.rgb_color:
+    if appearance.rgb_color is not None and _optional_int_tuple(attrs.get("rgb_color"), 3) != appearance.rgb_color:
         return False
     if appearance.effect is not None and attrs.get("effect") != appearance.effect:
         return False
@@ -579,11 +613,8 @@ def _crossed_nightly_boundary(start: datetime, end: datetime) -> bool:
     local_tz = end.tzinfo
     if local_tz is None:
         return True
-    cursor = start.astimezone(local_tz).date()
     end_local = end.astimezone(local_tz)
-    while cursor <= end_local.date():
-        boundary = datetime.combine(cursor, time(hour=1, minute=59), tzinfo=local_tz)
-        if start < boundary <= end:
-            return True
-        cursor += timedelta(days=1)
-    return False
+    boundary = datetime.combine(end_local.date(), time(hour=1, minute=59), tzinfo=local_tz)
+    if boundary > end_local:
+        boundary -= timedelta(days=1)
+    return start < boundary <= end

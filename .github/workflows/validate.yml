@@ -47,6 +47,6 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-test.txt
       - run: pip install -r requirements-test.txt
-      - run: ruff check custom_components/home_lighting_reconciliation tests
+      - run: ruff check custom_components/home_lighting_reconciliation custom_components/home_lighting_manager tests
       - run: python -m compileall -q custom_components
       - run: pytest -q

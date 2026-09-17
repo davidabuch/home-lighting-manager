@@ -2,7 +2,19 @@
 
 A Home Assistant lighting-orchestration package for deterministic ownership of several Philips Hue lighting surfaces.
 
-This repository contains the Home Lighting Manager package, its coupled automations, and review-branch reconciliation code. See [the reconciliation review](docs/reconciliation-review.md) for implementation scope, validation evidence, and installation/rollback instructions. Nothing in this branch has been deployed.
+This repository contains the legacy production lighting package and its coupled integrations, plus the observation-only replacement HLM. The [September 8 reconciliation review](docs/reconciliation-review.md) is historical implementation evidence. The current uncommitted Phase 1 milestone has not been deployed.
+
+## Replacement ownership core (shadow only)
+
+The [Ownership Scenario Contract](docs/OWNERSHIP_SCENARIO_CONTRACT.txt) is the authoritative
+behavioral specification, with the settled [Phase 1 clarifications](docs/OWNERSHIP_CONTRACT_CLARIFICATIONS.md). The priority tables and helper descriptions below describe the legacy
+production architecture, not the desired replacement behavior.
+
+`custom_components/home_lighting_manager/` remains observation-only with `command_authority: false`.
+The [Phase 1 ADR](docs/adr/0002-layered-operations-off-engine.md) explains the layered core,
+explicit operation model, OFF semantics, persistence, and deferred migration work. See the
+[contract acceptance matrix](docs/ownership-acceptance-scenarios.md) for executable versus deferred
+coverage. This work does not migrate or disable the legacy production implementation.
 
 ## Managed surfaces
 
@@ -16,7 +28,7 @@ The current installation manages:
 
 The exact entity IDs in this repository reflect the production installation and may need adaptation for another Home Assistant instance.
 
-## Ownership model
+## Legacy production ownership model
 
 Lighting is controlled by an explicit priority model rather than independent automations blindly issuing light commands.
 
@@ -237,7 +249,7 @@ Use Python 3.13 in an isolated environment:
 ```sh
 pip install -r requirements-test.txt
 LITELLM_LOCAL_MODEL_COST_MAP=True pytest -q
-ruff check custom_components/home_lighting_reconciliation tests
+ruff check custom_components/home_lighting_reconciliation custom_components/home_lighting_manager tests
 python -m compileall -q custom_components
 ```
 

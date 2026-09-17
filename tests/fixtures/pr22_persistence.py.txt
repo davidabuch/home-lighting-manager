@@ -7,15 +7,12 @@ are intentionally excluded so they can be recomputed from current Home Assistant
 
 from __future__ import annotations
 
-from collections import Counter
 from dataclasses import asdict, dataclass
 from typing import Any
 
 from .model import Appearance, FamilySession, LayerKind, OwnershipLayer
 
-# Keep HA Store's envelope readable; independently migrate the domain payload.
-STORE_ENVELOPE_VERSION = 1
-STORAGE_VERSION = 2
+STORAGE_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -24,10 +21,6 @@ class PersistedOwnershipState:
 
     layers: tuple[OwnershipLayer, ...]
     suppressed_sessions: tuple[FamilySession, ...]
-    # Parse outcomes only: not fields in the serialized domain payload.
-    rejected_layers: int = 0
-    rejected_sessions: int = 0
-    payload_rejected: bool = False
 
 
 def serialize_state(
@@ -47,7 +40,11 @@ def serialize_state(
                 }
             )
 
-    persisted_sessions = [_serialize_session(session) for session in sessions if session.suppressed]
+    persisted_sessions = [
+        _serialize_session(session)
+        for session in sessions
+        if session.suppressed
+    ]
 
     return {
         "version": STORAGE_VERSION,
@@ -62,71 +59,31 @@ def deserialize_state(payload: dict[str, Any] | None) -> PersistedOwnershipState
     Malformed individual records are dropped rather than treated as ownership authority. An
     unsupported top-level schema version discards the whole payload.
     """
-    if (
-        not isinstance(payload, dict)
-        or type(payload.get("version")) is not int
-        or payload.get("version") not in (1, STORAGE_VERSION)
-    ):
-        return PersistedOwnershipState(layers=(), suppressed_sessions=(), payload_rejected=True)
+    if not isinstance(payload, dict) or payload.get("version") != STORAGE_VERSION:
+        return PersistedOwnershipState(layers=(), suppressed_sessions=())
 
-    if not isinstance(payload.get("layers", []), list) or not isinstance(
-        payload.get("suppressed_sessions", []), list
-    ):
-        return PersistedOwnershipState(layers=(), suppressed_sessions=(), payload_rejected=True)
-    if len(payload.get("layers", [])) > 256 or len(payload.get("suppressed_sessions", [])) > 64:
-        return PersistedOwnershipState(layers=(), suppressed_sessions=(), payload_rejected=True)
-    counts = Counter(
-        item.get("entity_id")
-        for item in payload.get("layers", [])
-        if isinstance(item, dict) and isinstance(item.get("entity_id"), str)
-    )
     layers: list[OwnershipLayer] = []
     for item in payload.get("layers", []):
         try:
             if not isinstance(item, dict):
                 continue
             entity_id = item["entity_id"]
-            if (
-                not isinstance(entity_id, str)
-                or not entity_id.startswith("light.")
-                or len(entity_id) > 256
-                or counts[entity_id] != 1
-            ):
+            if not isinstance(entity_id, str) or not entity_id:
                 continue
             layer = _deserialize_layer(item["layer"])
-            if (
-                layer.kind not in (LayerKind.MANUAL, LayerKind.MANUAL_OFF)
-                or layer.owner != "manual"
-            ):
+            if layer.kind not in (LayerKind.MANUAL, LayerKind.MANUAL_OFF):
                 continue
-            if (
-                layer.appearance is None
-                or not layer.appearance.is_valid()
-                or layer.appearance.on is not (layer.kind is LayerKind.MANUAL)
-            ):
-                continue
-            if (
-                layer.family is not None
-                or layer.session_id is not None
-                or layer.parent_layer_id is not None
-            ):
-                continue  # Ordinary Manual cannot carry unvalidated session dependencies.
-            metadata = {"shadow": True}
+            metadata = dict(layer.metadata)
             metadata["persisted_entity_id"] = entity_id
             layers.append(_replace_metadata(layer, metadata))
         except (KeyError, TypeError, ValueError):
             continue
 
-    session_counts = Counter(
-        item.get("family")
-        for item in payload.get("suppressed_sessions", [])
-        if isinstance(item, dict) and isinstance(item.get("family"), str)
-    )
     sessions: list[FamilySession] = []
     for item in payload.get("suppressed_sessions", []):
         try:
             session = _deserialize_session(item)
-            if session.suppressed and session_counts[session.family] == 1:
+            if session.suppressed:
                 sessions.append(session)
         except (KeyError, TypeError, ValueError):
             continue
@@ -134,8 +91,6 @@ def deserialize_state(payload: dict[str, Any] | None) -> PersistedOwnershipState
     return PersistedOwnershipState(
         layers=tuple(layers),
         suppressed_sessions=tuple(sessions),
-        rejected_layers=len(payload.get("layers", [])) - len(layers),
-        rejected_sessions=len(payload.get("suppressed_sessions", [])) - len(sessions),
     )
 
 
@@ -153,9 +108,6 @@ def _serialize_layer(layer: OwnershipLayer) -> dict[str, Any]:
         "expires_at_boundary": layer.expires_at_boundary,
         "precedence": layer.precedence,
         "metadata": dict(layer.metadata),
-        "operation_id": layer.operation_id,
-        "group_id": layer.group_id,
-        "parent_layer_id": layer.parent_layer_id,
     }
 
 
@@ -168,11 +120,11 @@ def _deserialize_layer(data: dict[str, Any]) -> OwnershipLayer:
     generation = data.get("generation")
     order = data.get("order", 0)
     precedence = data.get("precedence", 0)
-    if not isinstance(layer_id, str) or not 0 < len(layer_id) <= 1024:
+    if not isinstance(layer_id, str) or not layer_id:
         raise TypeError("layer_id must be a non-empty string")
-    if not isinstance(owner, str) or not 0 < len(owner) <= 256:
+    if not isinstance(owner, str) or not owner:
         raise TypeError("owner must be a non-empty string")
-    if not isinstance(generation, int) or isinstance(generation, bool) or generation < 1:
+    if not isinstance(generation, int) or isinstance(generation, bool):
         raise TypeError("generation must be an integer")
     if not isinstance(order, int) or isinstance(order, bool):
         raise TypeError("order must be an integer")
@@ -200,14 +152,7 @@ def _deserialize_layer(data: dict[str, Any]) -> OwnershipLayer:
     if not isinstance(metadata, dict):
         raise TypeError("metadata must be a mapping")
 
-    provenance = {key: data.get(key) for key in ("operation_id", "group_id", "parent_layer_id")}
-    if any(
-        value is not None and (not isinstance(value, str) or not 0 < len(value) <= 256)
-        for value in provenance.values()
-    ):
-        raise TypeError("operation provenance must be bounded strings")
     return OwnershipLayer(
-        **provenance,
         layer_id=layer_id,
         owner=owner,
         kind=LayerKind(data["kind"]),
@@ -218,7 +163,7 @@ def _deserialize_layer(data: dict[str, Any]) -> OwnershipLayer:
         session_id=session_id,
         expires_at_boundary=expires_at_boundary,
         precedence=precedence,
-        metadata={},
+        metadata=dict(metadata),
     )
 
 
@@ -232,7 +177,6 @@ def _deserialize_appearance(data: dict[str, Any]) -> Appearance:
                 raise TypeError(f"{field} must contain {expected_length} values")
             normalized[field] = tuple(value)
     return Appearance(**normalized)
-
 
 def _serialize_session(session: FamilySession) -> dict[str, Any]:
     return {
@@ -252,11 +196,11 @@ def _deserialize_session(data: dict[str, Any]) -> FamilySession:
     generation = data.get("generation")
     suppressed = data.get("suppressed", False)
     suppression_reason = data.get("suppression_reason")
-    if not isinstance(family, str) or not 0 < len(family) <= 256:
+    if not isinstance(family, str) or not family:
         raise TypeError("family must be a non-empty string")
-    if not isinstance(session_id, str) or not 0 < len(session_id) <= 256:
+    if not isinstance(session_id, str) or not session_id:
         raise TypeError("session_id must be a non-empty string")
-    if not isinstance(generation, int) or isinstance(generation, bool) or generation < 1:
+    if not isinstance(generation, int) or isinstance(generation, bool):
         raise TypeError("generation must be an integer")
     if not isinstance(suppressed, bool):
         raise TypeError("suppressed must be a boolean")
@@ -269,7 +213,6 @@ def _deserialize_session(data: dict[str, Any]) -> FamilySession:
         suppressed=suppressed,
         suppression_reason=suppression_reason,
     )
-
 
 def _replace_metadata(layer: OwnershipLayer, metadata: dict[str, Any]) -> OwnershipLayer:
     return OwnershipLayer(
@@ -284,7 +227,4 @@ def _replace_metadata(layer: OwnershipLayer, metadata: dict[str, Any]) -> Owners
         expires_at_boundary=layer.expires_at_boundary,
         precedence=layer.precedence,
         metadata=metadata,
-        operation_id=layer.operation_id,
-        group_id=layer.group_id,
-        parent_layer_id=layer.parent_layer_id,
     )

@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from enum import StrEnum
 
+from .engine import NIGHTLY_BOUNDARY
 from .model import FamilySession, LayerKind, OwnershipLayer
 
 
@@ -76,6 +77,18 @@ def recover_layer(
             reason="non-manual ownership is recomputed from current truth",
         )
 
+    if (
+        layer.appearance is None
+        or not layer.appearance.is_valid()
+        or layer.appearance.on is not (layer.kind is LayerKind.MANUAL)
+    ):
+        return LayerRecoveryResult(
+            action=RecoveryAction.DROP_RECOMPUTE,
+            layer=None,
+            replay_commands=False,
+            reason="missing or invalid desired Manual state defaults to HLM",
+        )
+
     if evidence is None:
         return LayerRecoveryResult(
             action=RecoveryAction.DROP_RECOMPUTE,
@@ -106,7 +119,12 @@ def recover_layer(
             reason="ownership evidence is ambiguous",
         )
 
-    restored = replace(layer, generation=new_generation, order=0)
+    restored = replace(
+        layer,
+        generation=new_generation,
+        order=0,
+        expires_at_boundary=NIGHTLY_BOUNDARY,
+    )
     return LayerRecoveryResult(
         action=RecoveryAction.RESTORE,
         layer=restored,

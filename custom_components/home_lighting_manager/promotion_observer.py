@@ -43,7 +43,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
     ) -> None:
         super().__init__(hass, entity_ids, manual_precedence)
         self._pending_external_leaves: dict[str, _PendingExternalLeaf] = {}
-        self._last_external_promotion_key: tuple[str, str] | None = None
+        self._last_external_promotion_key: tuple[int | None, str] | None = None
         self._last_external_promotion_outcome: dict[str, object] | None = None
 
     @callback
@@ -51,6 +51,8 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         self, observation: ShadowObservation, new_state: State
     ) -> None:
         """Correlate external topology, then promote a qualified leaf at most once per burst."""
+        if observation.evidence.kind is IntentEvidenceKind.AVAILABILITY_CHANGE or observation.evidence.has_parent_id:
+            self._pending_external_leaves.pop(observation.entity_id, None)
         if (
             observation.evidence.attribution_source
             is not IntentAttributionSource.UNATTRIBUTED_EXTERNAL
@@ -87,7 +89,12 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         if not isinstance(entity_id, str) or not isinstance(started_at, str):
             return
 
-        promotion_key = (started_at, entity_id)
+        # A later leaf command needs fresh aggregate corroboration. Reusing the burst start
+        # as identity lost rapid ON/OFF or appearance updates within the same window.
+        if not members or entity_id not in members:
+            return
+        pending = self._pending_external_leaves.get(entity_id)
+        promotion_key = (pending.observation.sequence if pending else None, entity_id)
         if (
             promotion_key == self._last_external_promotion_key
             and self._last_external_promotion_outcome is not None
@@ -119,6 +126,9 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             appearance=pending.observation.appearance,
             operation=pending.observation.operation,
             manual_precedence=pending.observation.manual_precedence,
+            sequence=pending.observation.sequence,
+            generation=pending.observation.generation,
+            operation_id=pending.observation.operation_id,
         )
         decision = self.runtime.observe(promoted_observation)
         self._record_evidence(promoted_observation, decision, pending.state)
@@ -138,6 +148,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             entity_id
             for entity_id, pending in self._pending_external_leaves.items()
             if (now - pending.observed_at).total_seconds() > EXTERNAL_BURST_WINDOW_SECONDS
+            or (now - pending.observed_at).total_seconds() < 0
         ]
         for entity_id in stale:
             self._pending_external_leaves.pop(entity_id, None)

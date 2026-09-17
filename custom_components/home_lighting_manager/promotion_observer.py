@@ -51,6 +51,8 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             str, str, tuple[tuple[str, int], ...]
         ] | None = None
         self._last_external_group_promotion_outcome: dict[str, object] | None = None
+        self._external_group_burst_topology: dict[str, tuple[str, ...]] = {}
+        self._external_group_last_observed_at: datetime | None = None
 
     @callback
     def _record_external_topology(
@@ -70,9 +72,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             return
 
         observed_at = dt_util.now()
-        # Snapshot before any lookup that can learn membership from the current
-        # event. Exact-group promotion requires topology known before this event.
-        topology_before_event = dict(self._topology_members)
+        self._snapshot_group_topology_for_burst(observed_at)
         members = self._member_entity_ids_for_event(observation.entity_id, new_state)
         if (
             not members
@@ -102,8 +102,21 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             burst,
             candidate,
             current_entity_id=observation.entity_id,
-            topology_before_event=topology_before_event,
+            burst_topology=self._external_group_burst_topology,
         )
+
+    @callback
+    def _snapshot_group_topology_for_burst(self, observed_at: datetime) -> None:
+        """Freeze exact-group authority at burst start so new telemetry cannot self-qualify."""
+        previous = self._external_group_last_observed_at
+        if previous is None:
+            new_burst = True
+        else:
+            delta = (observed_at - previous).total_seconds()
+            new_burst = delta < 0 or delta > EXTERNAL_BURST_WINDOW_SECONDS
+        if new_burst:
+            self._external_group_burst_topology = dict(self._topology_members)
+        self._external_group_last_observed_at = observed_at
 
     @callback
     def _promote_single_candidate(
@@ -165,7 +178,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         candidate: dict[str, object],
         *,
         current_entity_id: str,
-        topology_before_event: dict[str, tuple[str, ...]],
+        burst_topology: dict[str, tuple[str, ...]],
     ) -> None:
         """Promote only one pre-known, uniquely identifiable exact aggregate operation."""
         if (
@@ -181,7 +194,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         group_id = resolve_unique_exact_group(
             leaf_entities=leaf_entities,
             observed_aggregate_entities=aggregate_entities,
-            topology_members=topology_before_event,
+            topology_members=burst_topology,
         )
         # The uniquely exact group must itself be the corroborating event. A
         # containing/nested aggregate arriving later cannot retroactively choose it.

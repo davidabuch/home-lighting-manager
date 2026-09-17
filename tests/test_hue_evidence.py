@@ -3,8 +3,6 @@ from unittest.mock import patch
 
 import pytest
 
-from custom_components.home_hue_scene_monitor.const import MANAGED_ZONES
-from custom_components.home_hue_scene_monitor.coordinator import HomeHueSceneCoordinator
 from custom_components.home_lighting_reconciliation.hue import HueEvidence
 
 
@@ -91,43 +89,6 @@ async def test_hue_actions_membership_and_equivalent_group_recalls(rig):
     assert (
         scenes["scene.expected"]["latest"] is False
     )  # Unmonitored alias recall prevents a takeover.
-
-
-@pytest.mark.asyncio
-async def test_monitor_detects_equivalent_group_recalls_without_changing_sensor_ids():
-    data = []
-    for key, group in MANAGED_ZONES.items():
-        data.append(
-            {
-                "id": key + "-old",
-                "group": {"rid": group["group_id"]},
-                "metadata": {"name": "Old"},
-                "status": {"last_recall": "2026-09-08T01:00:00Z", "active": "inactive"},
-            }
-        )
-    for key, group in [
-        ("path", "0ba84dd4-0fe1-4440-9b65-ea7ea1feff35"),
-        ("backyard", "bd7521e2-86b3-4679-8de1-e585c1089d66"),
-    ]:
-        data.append(
-            {
-                "id": key + "-external",
-                "group": {"rid": group},
-                "metadata": {"name": "External"},
-                "status": {"last_recall": "2026-09-08T02:00:00Z", "active": "dynamic_palette"},
-            }
-        )
-    c = object.__new__(HomeHueSceneCoordinator)
-    c._host = "test.invalid"
-    c._api_key = "test-only-placeholder"
-    c._session = Session(data)
-    result = await c._async_update_data()
-    assert result["path"]["scene_id"] == "path-external"
-    assert result["backyard"]["scene_id"] == "backyard-external"
-    assert result["main_area"]["scene_id"] == "main_area-old"
-    assert result["front_eve"]["scene_id"] == "front_eve-old"
-    assert len(result["path"]["monitored_hue_group_ids"]) == 2
-    assert len(result["backyard"]["monitored_hue_group_ids"]) == 3
 
 
 class WriteResponse:

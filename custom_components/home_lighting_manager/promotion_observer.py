@@ -7,10 +7,12 @@ calls Home Assistant services or commands a light.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
 from homeassistant.core import HomeAssistant, State, callback
+from homeassistant.helpers.event import async_call_later
 from homeassistant.util import dt as dt_util
 
 from .attribution_correlation import ExternalBurstTopology, resolve_unique_exact_group
@@ -45,6 +47,9 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
     ) -> None:
         super().__init__(hass, entity_ids, manual_precedence)
         self._pending_external_leaves: dict[str, _PendingExternalLeaf] = {}
+        self._pending_single_promotions: dict[
+            tuple[int | None, str], Callable[[], None]
+        ] = {}
         self._last_external_promotion_key: tuple[int | None, str] | None = None
         self._last_external_promotion_outcome: dict[str, object] | None = None
         self._last_external_group_promotion_key: tuple[
@@ -53,6 +58,13 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         self._last_external_group_promotion_outcome: dict[str, object] | None = None
         self._external_group_burst_topology: dict[str, tuple[str, ...]] = {}
         self._external_group_last_observed_at: datetime | None = None
+
+    async def async_shutdown(self) -> None:
+        """Cancel provisional promotions before unregistering the observer."""
+        for cancel in tuple(self._pending_single_promotions.values()):
+            cancel()
+        self._pending_single_promotions.clear()
+        await super().async_shutdown()
 
     @callback
     def _record_external_topology(
@@ -64,6 +76,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             or observation.evidence.has_parent_id
         ):
             self._pending_external_leaves.pop(observation.entity_id, None)
+            self._cancel_pending_single_for_entities((observation.entity_id,))
         if (
             observation.evidence.attribution_source
             is not IntentAttributionSource.UNATTRIBUTED_EXTERNAL
@@ -80,6 +93,12 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             and observation.operation in ("appearance", "off")
             and (observation.operation == "off" or observation.appearance is not None)
         ):
+            previous = self._pending_external_leaves.get(observation.entity_id)
+            if (
+                previous is not None
+                and previous.observation.sequence != observation.sequence
+            ):
+                self._cancel_pending_single_for_entities((observation.entity_id,))
             self._pending_external_leaves[observation.entity_id] = _PendingExternalLeaf(
                 observed_at=observed_at,
                 observation=observation,
@@ -96,7 +115,11 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         if not isinstance(candidate, dict):
             return
         if candidate.get("qualified") is True:
-            self._promote_single_candidate(candidate, members)
+            self._promote_single_candidate(
+                candidate,
+                members,
+                current_entity_id=observation.entity_id,
+            )
             return
         self._promote_exact_group_candidate(
             burst,
@@ -120,9 +143,13 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
 
     @callback
     def _promote_single_candidate(
-        self, candidate: dict[str, object], members: tuple[str, ...]
+        self,
+        candidate: dict[str, object],
+        members: tuple[str, ...],
+        *,
+        current_entity_id: str,
     ) -> None:
-        """Preserve the commissioned single-leaf promotion path unchanged."""
+        """Promote a leaf immediately unless a pre-known group burst may still resolve."""
         entity_id = candidate.get("entity_id")
         if not isinstance(entity_id, str):
             return
@@ -150,6 +177,72 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             )
             return
 
+        # Only a group that was known before this burst can later become exact-group
+        # authority. Newly learned aggregate telemetry cannot self-qualify, so it must not
+        # delay the already commissioned single-leaf promotion path.
+        preknown_members = self._external_group_burst_topology.get(current_entity_id)
+        if (
+            len(members) > 1
+            and preknown_members is not None
+            and frozenset(preknown_members) == frozenset(members)
+        ):
+            self._schedule_single_promotion(candidate, promotion_key, pending)
+            return
+
+        self._apply_single_promotion(candidate, promotion_key, pending)
+
+    @callback
+    def _schedule_single_promotion(
+        self,
+        candidate: dict[str, object],
+        promotion_key: tuple[int | None, str],
+        pending: _PendingExternalLeaf,
+    ) -> None:
+        """Hold a leaf promotion until the current group-correlation window closes."""
+        if promotion_key in self._pending_single_promotions:
+            candidate.update(
+                {
+                    "promoted_to_homeowner": False,
+                    "manual_ownership_recorded": False,
+                    "promotion_reason": "awaiting exact-group correlation window",
+                }
+            )
+            return
+
+        entity_id = pending.observation.entity_id
+
+        @callback
+        def _finalize(_now: datetime) -> None:
+            self._pending_single_promotions.pop(promotion_key, None)
+            current = self._pending_external_leaves.get(entity_id)
+            if (
+                current is None
+                or current.observation.sequence != pending.observation.sequence
+            ):
+                return
+            self._apply_single_promotion(candidate, promotion_key, pending)
+
+        self._pending_single_promotions[promotion_key] = async_call_later(
+            self.hass,
+            EXTERNAL_BURST_WINDOW_SECONDS,
+            _finalize,
+        )
+        candidate.update(
+            {
+                "promoted_to_homeowner": False,
+                "manual_ownership_recorded": False,
+                "promotion_reason": "awaiting exact-group correlation window",
+            }
+        )
+
+    @callback
+    def _apply_single_promotion(
+        self,
+        candidate: dict[str, object],
+        promotion_key: tuple[int | None, str],
+        pending: _PendingExternalLeaf,
+    ) -> None:
+        """Apply one retained leaf observation through the existing core path."""
         promoted_observation = ShadowObservation(
             entity_id=pending.observation.entity_id,
             evidence=_correlated_homeowner_evidence(),
@@ -170,6 +263,17 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
 
         if decision.mutated:
             self.hass.async_create_task(self.async_save())
+
+    @callback
+    def _cancel_pending_single_for_entities(self, entity_ids: tuple[str, ...]) -> None:
+        """Cancel provisional leaf promotions consumed by newer or exact-group evidence."""
+        wanted = frozenset(entity_ids)
+        stale_keys = [
+            key for key in self._pending_single_promotions if key[1] in wanted
+        ]
+        for key in stale_keys:
+            cancel = self._pending_single_promotions.pop(key)
+            cancel()
 
     @callback
     def _promote_exact_group_candidate(
@@ -200,6 +304,11 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         # containing/nested aggregate arriving later cannot retroactively choose it.
         if group_id is None or group_id != current_entity_id:
             return
+
+        # Once a pre-known exact group is proven, any provisional leaf promotions
+        # from this same burst are consumed by the group transaction. They must not
+        # race the exact operation or create a newer leaf sequence that rejects it.
+        self._cancel_pending_single_for_entities(leaf_entities)
 
         candidate.update(
             {
@@ -320,6 +429,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         ]
         for entity_id in stale:
             self._pending_external_leaves.pop(entity_id, None)
+            self._cancel_pending_single_for_entities((entity_id,))
 
 
 def _correlated_homeowner_evidence() -> IntentEvidence:

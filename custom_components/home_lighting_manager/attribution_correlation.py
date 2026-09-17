@@ -7,7 +7,7 @@ promote an observation to homeowner intent or command any Home Assistant entity.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
 
@@ -80,9 +80,9 @@ class ExternalBurstSummary:
             "topology": self.topology.value,
             "event_count": self.event_count,
             "unique_entity_count": self.unique_entity_count,
-            "leaf_entities": list(self.leaf_entities),
-            "aggregate_entities": list(self.aggregate_entities),
-            "propagated_leaf_entities": list(self.propagated_leaf_entities),
+            "leaf_entities": list(self.leaf_entities[:32]),
+            "aggregate_entities": list(self.aggregate_entities[:32]),
+            "propagated_leaf_entities": list(self.propagated_leaf_entities[:32]),
             "external_intent_candidate": self.external_intent_candidate(),
         }
 
@@ -100,13 +100,20 @@ class ExternalBurstCorrelator:
             raise ValueError("window_seconds must be positive")
         self.window_seconds = float(window_seconds)
         self._events: list[ExternalTopologyEvent] = []
+        self._last_timestamp: datetime | None = None
+        self._overflow = False
 
     def observe(self, event: ExternalTopologyEvent) -> ExternalBurstSummary:
         if self._events:
-            delta = (event.timestamp - self._events[-1].timestamp).total_seconds()
+            delta = (event.timestamp - self._last_timestamp).total_seconds()
             if delta < 0 or delta > self.window_seconds:
                 self._events.clear()
-        self._events.append(event)
+                self._overflow = False
+        self._last_timestamp = event.timestamp
+        if len(self._events) >= 128 or len(event.member_entity_ids) > 256:
+            self._overflow = True
+        if len(self._events) < 128:
+            self._events.append(replace(event, member_entity_ids=event.member_entity_ids[:256]))
         return self.summary()
 
     def summary(self) -> ExternalBurstSummary:
@@ -123,7 +130,9 @@ class ExternalBurstCorrelator:
         }
         propagated = sorted(set(leaves) & aggregate_members)
 
-        if leaves and not aggregates:
+        if self._overflow:
+            topology = ExternalBurstTopology.MIXED_UNRESOLVED
+        elif leaves and not aggregates:
             topology = (
                 ExternalBurstTopology.ISOLATED_LEAF
                 if len(leaves) == 1

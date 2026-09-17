@@ -70,6 +70,9 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             return
 
         observed_at = dt_util.now()
+        # Snapshot before any lookup that can learn membership from the current
+        # event. Exact-group promotion requires topology known before this event.
+        topology_before_event = dict(self._topology_members)
         members = self._member_entity_ids_for_event(observation.entity_id, new_state)
         if (
             not members
@@ -84,10 +87,6 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             )
         self._prune_pending_external_leaves(observed_at)
 
-        # Exact-group qualification may use only topology already known before this
-        # event. Learning a new aggregate during the same burst is insufficient proof
-        # that it was the homeowner-commanded scope.
-        topology_before_event = dict(self._topology_members)
         super()._record_external_topology(observation, new_state)
         burst = self._external_burst
         if not isinstance(burst, dict):

@@ -115,7 +115,11 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         if not isinstance(candidate, dict):
             return
         if candidate.get("qualified") is True:
-            self._promote_single_candidate(candidate, members)
+            self._promote_single_candidate(
+                candidate,
+                members,
+                current_entity_id=observation.entity_id,
+            )
             return
         self._promote_exact_group_candidate(
             burst,
@@ -139,9 +143,13 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
 
     @callback
     def _promote_single_candidate(
-        self, candidate: dict[str, object], members: tuple[str, ...]
+        self,
+        candidate: dict[str, object],
+        members: tuple[str, ...],
+        *,
+        current_entity_id: str,
     ) -> None:
-        """Promote a leaf immediately unless a multi-member group burst may still resolve."""
+        """Promote a leaf immediately unless a pre-known group burst may still resolve."""
         entity_id = candidate.get("entity_id")
         if not isinstance(entity_id, str):
             return
@@ -169,11 +177,15 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             )
             return
 
-        # A multi-member aggregate can be early evidence for an explicit group command.
-        # Do not let the first leaf mutate ownership before the rest of the short burst
-        # arrives. If no exact group resolves, the retained leaf is promoted when the
-        # correlation window closes.
-        if len(members) > 1:
+        # Only a group that was known before this burst can later become exact-group
+        # authority. Newly learned aggregate telemetry cannot self-qualify, so it must not
+        # delay the already commissioned single-leaf promotion path.
+        preknown_members = self._external_group_burst_topology.get(current_entity_id)
+        if (
+            len(members) > 1
+            and preknown_members is not None
+            and frozenset(preknown_members) == frozenset(members)
+        ):
             self._schedule_single_promotion(candidate, promotion_key, pending)
             return
 

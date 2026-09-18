@@ -217,6 +217,18 @@ class ShadowRuntime:
         """Return entities with any current-generation shadow ownership state."""
         return self.engine.entity_ids()
 
+    def reconciliation_protected_entities(
+        self, entity_ids: tuple[str, ...] | list[str] | set[str] | frozenset[str] | None = None
+    ) -> tuple[str, ...]:
+        """Return entities whose exposed shadow layer must block automatic repair."""
+        scope = self.engine.entity_ids() if entity_ids is None else tuple(entity_ids)
+        protected: list[str] = []
+        for entity_id in sorted(set(scope)):
+            layer = self.engine.resolve(entity_id).layer
+            if layer is not None and layer.kind in (LayerKind.MANUAL, LayerKind.MANUAL_OFF):
+                protected.append(entity_id)
+        return tuple(protected)
+
     def diagnostics(self) -> ShadowDiagnostics:
         """Return a compact non-sensitive shadow-runtime summary."""
         return ShadowDiagnostics(

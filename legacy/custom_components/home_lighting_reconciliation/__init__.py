@@ -13,7 +13,7 @@ from homeassistant.helpers import discovery
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.util import dt as dt_util
 
-from .const import CONTROL, DOMAIN, EVALUATORS, SIGNAL, SURFACES, TRANSIENTS
+from .const import CONTROL, DOMAIN, EVALUATORS, HLM_DIAGNOSTIC, SIGNAL, SURFACES, TRANSIENTS
 from .engine import GROUPS, LIQUOR, commands_in, verify
 from .hue import HueEvidence
 from .runtime import Reconciler
@@ -227,12 +227,22 @@ class Adapter:
             if old and new and old.attributes.get("current") == new.attributes.get("current"):
                 return
         elif entity in CONTROL:
-            if entity.endswith("_last_recall"):
+            if entity == HLM_DIAGNOSTIC:
+                if (
+                    old
+                    and new
+                    and old.attributes.get("manual_precedence_entities")
+                    == new.attributes.get("manual_precedence_entities")
+                    and old.attributes.get("reconciliation_protected_entities")
+                    == new.attributes.get("reconciliation_protected_entities")
+                ):
+                    return
+            elif entity.endswith("_last_recall"):
                 surface = entity.removeprefix("sensor.").removesuffix("_last_recall")
                 guard = self.hass.states.get("input_boolean.home_lighting_ha_guard_" + surface)
                 if guard and guard.state == "on":
                     return  # Our scene repair must not reset its own retry budget.
-            if old and new and old.state == new.state:
+            if old and new and old.state == new.state and entity != HLM_DIAGNOSTIC:
                 # Only score changes carry relevant attribute-based intent here.
                 if entity == "sensor.nfl_san_francisco_49ers":
                     if old.attributes.get("team_score") == new.attributes.get("team_score"):

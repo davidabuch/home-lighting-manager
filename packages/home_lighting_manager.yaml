@@ -183,6 +183,46 @@ script:
       living_room_sync_active: '{{ is_state(''binary_sensor.hue_bridge_living_room'', ''on'') }}'
       manual_main_area_active: '{{ is_state(''input_boolean.home_lighting_manual_main_area'', ''on'')
         }}'
+      hlm_manual_precedence_entities: >-
+        {{
+          state_attr(
+            'sensor.home_lighting_manager_shadow_health',
+            'manual_precedence_entities'
+          )
+          if is_state(
+            'sensor.home_lighting_manager_shadow_health',
+            'observing'
+          )
+          and state_attr(
+            'sensor.home_lighting_manager_shadow_health',
+            'command_authority'
+          ) == false
+          and state_attr(
+            'sensor.home_lighting_manager_shadow_health',
+            'manual_precedence_entities'
+          ) is iterable
+          else []
+        }}
+      hlm_reconciliation_protected_entities: >-
+        {{
+          state_attr(
+            'sensor.home_lighting_manager_shadow_health',
+            'reconciliation_protected_entities'
+          )
+          if is_state(
+            'sensor.home_lighting_manager_shadow_health',
+            'observing'
+          )
+          and state_attr(
+            'sensor.home_lighting_manager_shadow_health',
+            'command_authority'
+          ) == false
+          and state_attr(
+            'sensor.home_lighting_manager_shadow_health',
+            'reconciliation_protected_entities'
+          ) is iterable
+          else []
+        }}
       manual_main_area_entities: >-
         {% set ns = namespace(entities=[]) %}
         {% set ownership = [
@@ -216,7 +256,15 @@ script:
           )
         ] %}
         {% for entity, helper in ownership %}
-          {% if is_state(helper, 'on') %}
+          {% if
+            entity not in hlm_manual_precedence_entities
+            and is_state(helper, 'on')
+          %}
+            {% set ns.entities = ns.entities + [entity] %}
+          {% endif %}
+        {% endfor %}
+        {% for entity in hlm_reconciliation_protected_entities %}
+          {% if entity not in ns.entities %}
             {% set ns.entities = ns.entities + [entity] %}
           {% endif %}
         {% endfor %}
@@ -398,9 +446,57 @@ script:
 
           # Kitchen Left Cabinet
           - if:
-              - condition: state
-                entity_id: input_boolean.home_lighting_manual_kitchen_left_cabinet
-                state: "off"
+              - condition: template
+                value_template: >-
+                  {% set migrated =
+                    state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'manual_precedence_entities'
+                    )
+                    if is_state(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'observing'
+                    )
+                    and state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'command_authority'
+                    ) == false
+                    and state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'manual_precedence_entities'
+                    ) is iterable
+                    else []
+                  %}
+                  {% set protected =
+                    state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'reconciliation_protected_entities'
+                    )
+                    if is_state(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'observing'
+                    )
+                    and state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'command_authority'
+                    ) == false
+                    and state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'reconciliation_protected_entities'
+                    ) is iterable
+                    else []
+                  %}
+                  {{
+                    (
+                      'light.kitchen_kitchen_left_cabinet_light' in migrated
+                      and 'light.kitchen_kitchen_left_cabinet_light' not in protected
+                    )
+                    or
+                    (
+                      'light.kitchen_kitchen_left_cabinet_light' not in migrated
+                      and is_state('input_boolean.home_lighting_manual_kitchen_left_cabinet', 'off')
+                    )
+                  }}
             then:
               - action: light.turn_on
                 target:
@@ -413,9 +509,57 @@ script:
 
           # Kitchen Right Cabinets
           - if:
-              - condition: state
-                entity_id: input_boolean.home_lighting_manual_kitchen_right_cabinet
-                state: "off"
+              - condition: template
+                value_template: >-
+                  {% set migrated =
+                    state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'manual_precedence_entities'
+                    )
+                    if is_state(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'observing'
+                    )
+                    and state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'command_authority'
+                    ) == false
+                    and state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'manual_precedence_entities'
+                    ) is iterable
+                    else []
+                  %}
+                  {% set protected =
+                    state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'reconciliation_protected_entities'
+                    )
+                    if is_state(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'observing'
+                    )
+                    and state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'command_authority'
+                    ) == false
+                    and state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'reconciliation_protected_entities'
+                    ) is iterable
+                    else []
+                  %}
+                  {{
+                    (
+                      'light.kitchen_kitchen_right_cabinet_lights' in migrated
+                      and 'light.kitchen_kitchen_right_cabinet_lights' not in protected
+                    )
+                    or
+                    (
+                      'light.kitchen_kitchen_right_cabinet_lights' not in migrated
+                      and is_state('input_boolean.home_lighting_manual_kitchen_right_cabinet', 'off')
+                    )
+                  }}
             then:
               - action: light.turn_on
                 target:
@@ -428,9 +572,57 @@ script:
 
           # Living Room Left Cabinets
           - if:
-              - condition: state
-                entity_id: input_boolean.home_lighting_manual_living_left_cabinets
-                state: "off"
+              - condition: template
+                value_template: >-
+                  {% set migrated =
+                    state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'manual_precedence_entities'
+                    )
+                    if is_state(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'observing'
+                    )
+                    and state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'command_authority'
+                    ) == false
+                    and state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'manual_precedence_entities'
+                    ) is iterable
+                    else []
+                  %}
+                  {% set protected =
+                    state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'reconciliation_protected_entities'
+                    )
+                    if is_state(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'observing'
+                    )
+                    and state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'command_authority'
+                    ) == false
+                    and state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'reconciliation_protected_entities'
+                    ) is iterable
+                    else []
+                  %}
+                  {{
+                    (
+                      'light.living_room_living_room_left_cabinets' in migrated
+                      and 'light.living_room_living_room_left_cabinets' not in protected
+                    )
+                    or
+                    (
+                      'light.living_room_living_room_left_cabinets' not in migrated
+                      and is_state('input_boolean.home_lighting_manual_living_left_cabinets', 'off')
+                    )
+                  }}
             then:
               - action: light.turn_on
                 target:
@@ -445,9 +637,57 @@ script:
 
           # Living Room Right Cabinets
           - if:
-              - condition: state
-                entity_id: input_boolean.home_lighting_manual_living_right_cabinets
-                state: "off"
+              - condition: template
+                value_template: >-
+                  {% set migrated =
+                    state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'manual_precedence_entities'
+                    )
+                    if is_state(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'observing'
+                    )
+                    and state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'command_authority'
+                    ) == false
+                    and state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'manual_precedence_entities'
+                    ) is iterable
+                    else []
+                  %}
+                  {% set protected =
+                    state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'reconciliation_protected_entities'
+                    )
+                    if is_state(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'observing'
+                    )
+                    and state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'command_authority'
+                    ) == false
+                    and state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'reconciliation_protected_entities'
+                    ) is iterable
+                    else []
+                  %}
+                  {{
+                    (
+                      'light.living_room_living_room_right_cabinet_lights' in migrated
+                      and 'light.living_room_living_room_right_cabinet_lights' not in protected
+                    )
+                    or
+                    (
+                      'light.living_room_living_room_right_cabinet_lights' not in migrated
+                      and is_state('input_boolean.home_lighting_manual_living_right_cabinets', 'off')
+                    )
+                  }}
             then:
               - action: light.turn_on
                 target:
@@ -463,9 +703,57 @@ script:
           # Liquor Cabinet
           # Existing door-open automation remains authoritative.
           - if:
-              - condition: state
-                entity_id: input_boolean.home_lighting_manual_liquor_cabinet
-                state: "off"
+              - condition: template
+                value_template: >-
+                  {% set migrated =
+                    state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'manual_precedence_entities'
+                    )
+                    if is_state(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'observing'
+                    )
+                    and state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'command_authority'
+                    ) == false
+                    and state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'manual_precedence_entities'
+                    ) is iterable
+                    else []
+                  %}
+                  {% set protected =
+                    state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'reconciliation_protected_entities'
+                    )
+                    if is_state(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'observing'
+                    )
+                    and state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'command_authority'
+                    ) == false
+                    and state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'reconciliation_protected_entities'
+                    ) is iterable
+                    else []
+                  %}
+                  {{
+                    (
+                      'light.living_room_liquor_cabinet_light' in migrated
+                      and 'light.living_room_liquor_cabinet_light' not in protected
+                    )
+                    or
+                    (
+                      'light.living_room_liquor_cabinet_light' not in migrated
+                      and is_state('input_boolean.home_lighting_manual_liquor_cabinet', 'off')
+                    )
+                  }}
               - condition: state
                 entity_id: binary_sensor.liquor_cabinet_door_r
                 state: "off"
@@ -486,9 +774,57 @@ script:
 
           # Living Room Left Ceiling
           - if:
-              - condition: state
-                entity_id: input_boolean.home_lighting_manual_living_left_ceiling
-                state: "off"
+              - condition: template
+                value_template: >-
+                  {% set migrated =
+                    state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'manual_precedence_entities'
+                    )
+                    if is_state(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'observing'
+                    )
+                    and state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'command_authority'
+                    ) == false
+                    and state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'manual_precedence_entities'
+                    ) is iterable
+                    else []
+                  %}
+                  {% set protected =
+                    state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'reconciliation_protected_entities'
+                    )
+                    if is_state(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'observing'
+                    )
+                    and state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'command_authority'
+                    ) == false
+                    and state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'reconciliation_protected_entities'
+                    ) is iterable
+                    else []
+                  %}
+                  {{
+                    (
+                      'light.living_room_left_ceiling_light' in migrated
+                      and 'light.living_room_left_ceiling_light' not in protected
+                    )
+                    or
+                    (
+                      'light.living_room_left_ceiling_light' not in migrated
+                      and is_state('input_boolean.home_lighting_manual_living_left_ceiling', 'off')
+                    )
+                  }}
             then:
               - action: light.turn_on
                 target:
@@ -503,9 +839,57 @@ script:
 
           # Living Room Right Ceiling
           - if:
-              - condition: state
-                entity_id: input_boolean.home_lighting_manual_living_right_ceiling
-                state: "off"
+              - condition: template
+                value_template: >-
+                  {% set migrated =
+                    state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'manual_precedence_entities'
+                    )
+                    if is_state(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'observing'
+                    )
+                    and state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'command_authority'
+                    ) == false
+                    and state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'manual_precedence_entities'
+                    ) is iterable
+                    else []
+                  %}
+                  {% set protected =
+                    state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'reconciliation_protected_entities'
+                    )
+                    if is_state(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'observing'
+                    )
+                    and state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'command_authority'
+                    ) == false
+                    and state_attr(
+                      'sensor.home_lighting_manager_shadow_health',
+                      'reconciliation_protected_entities'
+                    ) is iterable
+                    else []
+                  %}
+                  {{
+                    (
+                      'light.living_room_living_room_right_ceiling' in migrated
+                      and 'light.living_room_living_room_right_ceiling' not in protected
+                    )
+                    or
+                    (
+                      'light.living_room_living_room_right_ceiling' not in migrated
+                      and is_state('input_boolean.home_lighting_manual_living_right_ceiling', 'off')
+                    )
+                  }}
             then:
               - action: light.turn_on
                 target:
@@ -1454,6 +1838,27 @@ automation:
               )
             }}
 
+          hlm_manual_precedence_entities: >-
+            {{
+              state_attr(
+                'sensor.home_lighting_manager_shadow_health',
+                'manual_precedence_entities'
+              )
+              if is_state(
+                'sensor.home_lighting_manager_shadow_health',
+                'observing'
+              )
+              and state_attr(
+                'sensor.home_lighting_manager_shadow_health',
+                'command_authority'
+              ) == false
+              and state_attr(
+                'sensor.home_lighting_manager_shadow_health',
+                'manual_precedence_entities'
+              ) is iterable
+              else []
+            }}
+
           hue_scene_recall_is_newer: >-
             {% set old =
               trigger.from_state.state
@@ -1584,6 +1989,9 @@ automation:
           - conditions:
               - condition: trigger
                 id: main_member_on
+              - condition: template
+                value_template: >-
+                  {{ trigger.entity_id not in hlm_manual_precedence_entities }}
               - condition: state
                 entity_id: input_boolean.home_lighting_ha_guard_main_area
                 state: "off"
@@ -1617,6 +2025,9 @@ automation:
           - conditions:
               - condition: trigger
                 id: main_member_off
+              - condition: template
+                value_template: >-
+                  {{ trigger.entity_id not in hlm_manual_precedence_entities }}
               - condition: state
                 entity_id: input_boolean.home_lighting_ha_guard_main_area
                 state: "off"

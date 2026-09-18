@@ -388,3 +388,59 @@ def test_main_area_manual_member_transitions_are_guarded_from_ha_commands():
             "entity_id": "input_boolean.home_lighting_ha_guard_main_area",
             "state": "off",
         } in choice["conditions"]
+
+
+
+@pytest.mark.asyncio
+async def test_migrated_main_area_leaf_ignores_stale_legacy_helper(rig):
+    """HLM migration scope, not the old helper, decides protection for migrated leaves."""
+
+    entity = "light.living_room_living_room_right_ceiling"
+    rig.set(
+        "sensor.home_lighting_manager_shadow_health",
+        "observing",
+        {
+            "command_authority": False,
+            "manual_precedence_entities": [entity],
+            "reconciliation_protected_entities": [],
+        },
+    )
+    rig.set("input_boolean.home_lighting_manual_living_right_ceiling", "on")
+
+    owners = (await rig.run("home_lighting_resolve_owners")).service_response
+
+    assert entity not in owners["main_area"]["manual_entities"]
+
+
+@pytest.mark.asyncio
+async def test_hlm_protected_main_area_leaf_joins_resolver_manual_entities(rig):
+    """The resolver consumes the HLM protection projection without mirroring a helper."""
+
+    entity = "light.living_room_living_room_right_ceiling"
+    rig.set(
+        "sensor.home_lighting_manager_shadow_health",
+        "observing",
+        {
+            "command_authority": False,
+            "manual_precedence_entities": [entity],
+            "reconciliation_protected_entities": [entity],
+        },
+    )
+    rig.set("input_boolean.home_lighting_manual_living_right_ceiling", "off")
+
+    owners = (await rig.run("home_lighting_resolve_owners")).service_response
+
+    assert entity in owners["main_area"]["manual_entities"]
+
+
+def test_migrated_main_area_detector_does_not_reassert_legacy_helper():
+    """Legacy state-transition ownership is disabled only for HLM-migrated leaves."""
+
+    for trigger_id in ("main_member_on", "main_member_off"):
+        choice = _detector_choice(trigger_id)
+        assert any(
+            condition.get("condition") == "template"
+            and "trigger.entity_id not in hlm_manual_precedence_entities"
+            in condition.get("value_template", "")
+            for condition in choice["conditions"]
+        )

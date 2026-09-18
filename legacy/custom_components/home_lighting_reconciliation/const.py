@@ -2,6 +2,7 @@
 
 DOMAIN = "home_lighting_reconciliation"
 SIGNAL = DOMAIN + "_updated"
+HLM_DIAGNOSTIC = "sensor.home_lighting_manager_shadow_health"
 SURFACES = ("main_area", "front_eve", "path", "backyard")
 TRANSIENTS = {
     "automation.49ers_live_game_lighting_and_score_celebration": ("main_area", "front_eve"),
@@ -35,4 +36,5 @@ CONTROL = {
     "binary_sensor.liquor_cabinet_l_door",
     "sensor.nfl_san_francisco_49ers",
     *(f"sensor.{s}_last_recall" for s in ("main_area", "front_eve", "path", "backyard")),
+    HLM_DIAGNOSTIC,
 }

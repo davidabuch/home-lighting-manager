@@ -763,3 +763,45 @@ async def test_external_event_refreshes_live_topology_before_correlation(
 
     await observer.async_shutdown()
     await hass.async_block_till_done()
+
+
+
+@pytest.mark.asyncio
+async def test_shadow_health_publishes_migration_and_reconciliation_protection(rig):
+    from custom_components.home_lighting_manager.ha_observer import HomeAssistantShadowObserver
+    from custom_components.home_lighting_manager.intent_policy import (
+        IntentAttributionSource,
+        IntentEvidence,
+        IntentEvidenceKind,
+    )
+    from custom_components.home_lighting_manager.model import Appearance
+    from custom_components.home_lighting_manager.shadow import ShadowObservation
+
+    entity = "light.living_room_living_room_right_ceiling"
+    observer = HomeAssistantShadowObserver(
+        rig.hass,
+        [entity],
+        {entity: 250},
+    )
+    observer.runtime.observe(
+        ShadowObservation(
+            entity_id=entity,
+            evidence=IntentEvidence(
+                kind=IntentEvidenceKind.EXPLICIT_HOMEOWNER_COMMAND,
+                succeeded=True,
+                attribution_coherent=True,
+                attribution_source=IntentAttributionSource.HOME_ASSISTANT_USER,
+                has_user_id=True,
+                has_parent_id=False,
+            ),
+            appearance=Appearance(on=True, brightness=155),
+            manual_precedence=250,
+        )
+    )
+
+    observer._publish_diagnostics()
+    health = rig.get("sensor.home_lighting_manager_shadow_health")
+
+    assert health.attributes["command_authority"] is False
+    assert health.attributes["manual_precedence_entities"] == [entity]
+    assert health.attributes["reconciliation_protected_entities"] == [entity]

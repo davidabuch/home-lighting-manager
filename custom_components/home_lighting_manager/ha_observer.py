@@ -330,6 +330,12 @@ class HomeAssistantShadowObserver:
             "precedence_configured_entities": sum(
                 1 for entity_id in self.entity_ids if entity_id in self.manual_precedence
             ),
+            "manual_precedence_entities": sorted(self.manual_precedence),
+            "reconciliation_protected_entities": list(
+                self.runtime.reconciliation_protected_entities(
+                    set(self.manual_precedence)
+                )
+            ),
             "storage_status": self._storage_status,
             "command_authority": False,
             "evidence_ledger_size": EVIDENCE_LEDGER_SIZE,

@@ -103,3 +103,47 @@ async def test_unknown_device_bounded_without_commands():
     r.schedule("startup")
     await r.task
     assert r.diag["health"] == "degraded" and not a.sent
+
+
+
+def test_reconciliation_protected_entities_reports_only_exposed_manual_layers():
+    from custom_components.home_lighting_manager.intent_policy import (
+        IntentAttributionSource,
+        IntentEvidence,
+        IntentEvidenceKind,
+    )
+    from custom_components.home_lighting_manager.model import Appearance
+    from custom_components.home_lighting_manager.shadow import ShadowObservation, ShadowRuntime
+
+    entity = "light.living_room_living_room_right_ceiling"
+    other = "light.kitchen_kitchen_left_cabinet_light"
+    runtime = ShadowRuntime(generation=7, managed_entities=frozenset({entity, other}))
+    evidence = IntentEvidence(
+        kind=IntentEvidenceKind.EXPLICIT_HOMEOWNER_COMMAND,
+        succeeded=True,
+        attribution_coherent=True,
+        attribution_source=IntentAttributionSource.HOME_ASSISTANT_USER,
+        has_user_id=True,
+        has_parent_id=False,
+    )
+
+    runtime.observe(
+        ShadowObservation(
+            entity_id=entity,
+            evidence=evidence,
+            appearance=Appearance(on=True, brightness=155),
+            manual_precedence=250,
+        )
+    )
+
+    assert runtime.reconciliation_protected_entities({entity, other}) == (entity,)
+
+    runtime.observe(
+        ShadowObservation(
+            entity_id=entity,
+            evidence=evidence,
+            operation="off",
+        )
+    )
+
+    assert runtime.reconciliation_protected_entities({entity, other}) == ()

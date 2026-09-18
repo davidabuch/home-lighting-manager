@@ -302,6 +302,107 @@ async def test_adapter_selective_scene_repair_fails_closed_on_hue_error(rig):
     )
 
 
+
+
+@pytest.mark.asyncio
+async def test_hlm_manual_projection_protects_right_ceiling_from_daily_repair(rig):
+    """New HLM Manual ownership is authoritative even when the legacy helper is OFF."""
+
+    a, args = adapter_for(rig)
+    entity = "light.living_room_living_room_right_ceiling"
+
+    rig.set(
+        "sensor.home_lighting_manager_shadow_health",
+        "observing",
+        {
+            "command_authority": False,
+            "manual_precedence_entities": [entity],
+            "reconciliation_protected_entities": [entity],
+        },
+    )
+    rig.set("input_boolean.home_lighting_manual_living_right_ceiling", "off")
+    rig.set("input_boolean.home_lighting_manual_main_area", "off")
+    rig.set(
+        entity,
+        "on",
+        {
+            **args[1][entity]["attributes"],
+            "brightness": 155,
+        },
+    )
+
+    check, owners = await a.inspect()
+
+    assert owners["main_area"]["owner"] == "daily"
+    assert entity in owners["main_area"]["manual_entities"]
+    assert not any(command.entity == entity for command in check.commands)
+    assert not any(
+        issue.get("entity") == entity and "difference" in issue
+        for issue in check.issues
+    )
+
+
+@pytest.mark.asyncio
+async def test_hlm_manual_release_returns_right_ceiling_to_daily_repair(rig):
+    """Removing the HLM Manual layer makes the migrated leaf automatically repairable again."""
+
+    a, args = adapter_for(rig)
+    entity = "light.living_room_living_room_right_ceiling"
+
+    rig.set(
+        "sensor.home_lighting_manager_shadow_health",
+        "observing",
+        {
+            "command_authority": False,
+            "manual_precedence_entities": [entity],
+            "reconciliation_protected_entities": [],
+        },
+    )
+    rig.set("input_boolean.home_lighting_manual_living_right_ceiling", "on")
+    rig.set("input_boolean.home_lighting_manual_main_area", "on")
+    rig.set(
+        entity,
+        "on",
+        {
+            **args[1][entity]["attributes"],
+            "brightness": 155,
+        },
+    )
+
+    check, owners = await a.inspect()
+
+    assert owners["main_area"]["owner"] == "daily"
+    assert entity not in owners["main_area"]["manual_entities"]
+    commands = [command for command in check.commands if command.entity == entity]
+    assert len(commands) == 1
+    assert commands[0].service == "light.turn_on"
+    assert commands[0].data["brightness"] == 43
+
+
+@pytest.mark.asyncio
+async def test_hlm_manual_off_projection_blocks_daily_turn_on(rig):
+    """Manual-OFF uses the same per-entity protection projection and remains physically OFF."""
+
+    a, _ = adapter_for(rig)
+    entity = "light.living_room_living_room_right_ceiling"
+
+    rig.set(
+        "sensor.home_lighting_manager_shadow_health",
+        "observing",
+        {
+            "command_authority": False,
+            "manual_precedence_entities": [entity],
+            "reconciliation_protected_entities": [entity],
+        },
+    )
+    rig.set("input_boolean.home_lighting_manual_living_right_ceiling", "off")
+    rig.set(entity, "off", {})
+
+    check, owners = await a.inspect()
+
+    assert entity in owners["main_area"]["manual_entities"]
+    assert not any(command.entity == entity for command in check.commands)
+
 @pytest.mark.asyncio
 async def test_adapter_minimal_repair_uses_guard_without_asserting_manual(rig):
     a, args = adapter_for(rig)

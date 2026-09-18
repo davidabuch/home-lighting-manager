@@ -316,3 +316,88 @@ async def test_late_exact_group_cannot_overwrite_newer_direct_member_intent(tmp_
     finally:
         await observer.async_shutdown()
         await hass.async_block_till_done()
+
+
+
+@pytest.mark.asyncio
+async def test_guarded_automatic_right_ceiling_burst_does_not_create_manual(tmp_path):
+    """A manager-owned repair must not become homeowner intent via Hue propagation."""
+
+    leaf = "light.living_room_living_room_right_ceiling"
+    group = "light.holiday_main_area"
+    guard = "input_boolean.home_lighting_ha_guard_main_area"
+    hass, observer = await observer_for(tmp_path, [leaf, group])
+    try:
+        hass.states.async_set(guard, "on")
+        hass.states.async_set(
+            leaf,
+            "on",
+            {
+                "brightness": 43,
+                "color_mode": "xy",
+                "xy_color": [0.4711, 0.3867],
+            },
+        )
+        await hass.async_block_till_done()
+        hass.states.async_set(
+            group,
+            "on",
+            {
+                "entity_id": [leaf],
+                "brightness": 43,
+            },
+        )
+        await hass.async_block_till_done()
+
+        assert observer.runtime.engine.resolve(leaf).layer is None
+        assert not observer.runtime.operations.history
+        attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
+        candidate = attrs["external_burst"]["external_intent_candidate"]
+        assert candidate["qualified"] is True
+        assert candidate["promoted_to_homeowner"] is False
+        assert attrs["command_authority"] is False
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_hue_dynamic_palette_churn_does_not_create_manual(tmp_path):
+    """Ongoing dynamic-scene leaf churn is automatic telemetry, not homeowner intent."""
+
+    leaf = "light.front_yard_front_path_light_1"
+    group = "light.holiday_path"
+    hass, observer = await observer_for(tmp_path, [leaf, group])
+    try:
+        hass.states.async_set(
+            leaf,
+            "on",
+            {
+                "brightness": 255,
+                "color_mode": "xy",
+                "xy_color": [0.4634, 0.4181],
+                "dynamics": "dynamic_palette",
+            },
+        )
+        await hass.async_block_till_done()
+        hass.states.async_set(
+            group,
+            "on",
+            {
+                "entity_id": [leaf],
+                "brightness": 255,
+                "dynamics": "dynamic_palette",
+            },
+        )
+        await hass.async_block_till_done()
+
+        assert observer.runtime.engine.resolve(leaf).layer is None
+        assert not observer.runtime.operations.history
+        attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
+        candidate = attrs["external_burst"]["external_intent_candidate"]
+        assert candidate["qualified"] is True
+        assert candidate["promoted_to_homeowner"] is False
+        assert attrs["command_authority"] is False
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()

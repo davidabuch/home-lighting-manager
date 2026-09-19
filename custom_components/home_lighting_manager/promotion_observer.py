@@ -15,7 +15,10 @@ from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.helpers.event import async_call_later
 from homeassistant.util import dt as dt_util
 
-from .attribution_correlation import ExternalBurstTopology, resolve_unique_exact_group
+from .attribution_correlation import (
+    ExternalBurstTopology,
+    resolve_unique_exact_group,
+)
 from .ha_observer import EXTERNAL_BURST_WINDOW_SECONDS, HomeAssistantShadowObserver
 from .intent_policy import (
     IntentAttributionSource,
@@ -25,6 +28,13 @@ from .intent_policy import (
 )
 from .operations import HomeownerOperation, MemberOutcome, OperationResult
 from .shadow import ShadowDecision, ShadowObservation
+
+_SURFACE_GUARDS: tuple[tuple[str, str], ...] = (
+    ("light.holiday_main_area", "input_boolean.home_lighting_ha_guard_main_area"),
+    ("light.front_eve_zone", "input_boolean.home_lighting_ha_guard_front_eve"),
+    ("light.holiday_path", "input_boolean.home_lighting_ha_guard_path"),
+    ("light.holiday_backyard", "input_boolean.home_lighting_ha_guard_backyard"),
+)
 
 
 @dataclass(frozen=True)
@@ -87,7 +97,15 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         observed_at = dt_util.now()
         self._snapshot_group_topology_for_burst(observed_at)
         members = self._member_entity_ids_for_event(observation.entity_id, new_state)
-        if (
+        automatic_reason = (
+            self._automatic_external_evidence_reason(observation.entity_id, new_state)
+            if not members
+            else None
+        )
+        if automatic_reason is not None:
+            self._pending_external_leaves.pop(observation.entity_id, None)
+            self._cancel_pending_single_for_entities((observation.entity_id,))
+        elif (
             not members
             and observation.evidence.kind is IntentEvidenceKind.UNKNOWN
             and observation.operation in ("appearance", "off")
@@ -127,6 +145,32 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             current_entity_id=observation.entity_id,
             burst_topology=self._external_group_burst_topology,
         )
+
+    @callback
+    def _automatic_external_evidence_reason(
+        self, entity_id: str, new_state: State
+    ) -> str | None:
+        """Return why context-less leaf telemetry must not be promoted as homeowner intent."""
+        dynamics = new_state.attributes.get("dynamics")
+        if isinstance(dynamics, str) and dynamics not in ("", "none"):
+            return "active Hue dynamics are automatic scene telemetry"
+
+        matching_guards = [
+            guard_id
+            for aggregate_id, guard_id in _SURFACE_GUARDS
+            if entity_id in self._topology_members.get(aggregate_id, ())
+        ]
+        if not matching_guards and entity_id in self.manual_precedence:
+            # Startup or sparse Hue telemetry can precede aggregate membership.
+            # A short active manager guard is then sufficient negative evidence:
+            # ambiguity must fail closed rather than manufacture Manual ownership.
+            matching_guards = [guard_id for _, guard_id in _SURFACE_GUARDS]
+
+        for guard_id in matching_guards:
+            guard = self.hass.states.get(guard_id)
+            if guard is not None and guard.state == "on":
+                return f"HA command guard is active: {guard_id}"
+        return None
 
     @callback
     def _snapshot_group_topology_for_burst(self, observed_at: datetime) -> None:

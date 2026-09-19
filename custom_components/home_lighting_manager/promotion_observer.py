@@ -117,7 +117,12 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             if (
                 previous is not None
                 and previous.observation.sequence != observation.sequence
+                and previous.observation.operation != observation.operation
             ):
+                # A materially different newer command supersedes provisional intent.
+                # Repeated Hue reports for the same operation (for example slider
+                # transition steps) update the retained leaf without restarting the
+                # exact-group correlation timer.
                 self._cancel_pending_single_for_entities((observation.entity_id,))
             self._pending_external_leaves[observation.entity_id] = _PendingExternalLeaf(
                 observed_at=observed_at,
@@ -294,12 +299,24 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         def _finalize(_now: datetime) -> None:
             self._pending_single_promotions.pop(promotion_key, None)
             current = self._pending_external_leaves.get(entity_id)
-            if (
-                current is None
-                or current.observation.sequence != pending.observation.sequence
-            ):
+            if current is None:
                 return
-            self._apply_single_promotion(candidate, promotion_key, pending)
+            if current.observation.operation != pending.observation.operation:
+                return
+
+            latest_candidate = candidate
+            burst = self._external_burst
+            if isinstance(burst, dict):
+                maybe_candidate = burst.get("external_intent_candidate")
+                if (
+                    isinstance(maybe_candidate, dict)
+                    and maybe_candidate.get("qualified") is True
+                    and maybe_candidate.get("entity_id") == entity_id
+                ):
+                    latest_candidate = maybe_candidate
+
+            current_key = (current.observation.sequence, entity_id)
+            self._apply_single_promotion(latest_candidate, current_key, current)
 
         self._pending_single_promotions[promotion_key] = async_call_later(
             self.hass,

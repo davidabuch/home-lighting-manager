@@ -283,7 +283,16 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         pending: _PendingExternalLeaf,
     ) -> None:
         """Hold a leaf promotion until the current group-correlation window closes."""
-        if promotion_key in self._pending_single_promotions:
+        entity_id = pending.observation.entity_id
+        existing_key = next(
+            (
+                key
+                for key in self._pending_single_promotions
+                if key[1] == entity_id
+            ),
+            None,
+        )
+        if existing_key is not None:
             candidate.update(
                 {
                     "promoted_to_homeowner": False,
@@ -292,8 +301,6 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
                 }
             )
             return
-
-        entity_id = pending.observation.entity_id
 
         @callback
         def _finalize(_now: datetime) -> None:

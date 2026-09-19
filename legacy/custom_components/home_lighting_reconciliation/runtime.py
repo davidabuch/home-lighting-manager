@@ -22,7 +22,7 @@ class Reconciler:
             "generation": 0,
         }
 
-    def schedule(self, reason):
+    def schedule(self, reason, *, delay=None):
         self.generation += 1
         if self.task:
             self.task.cancel()
@@ -32,7 +32,8 @@ class Reconciler:
             last_check_trigger=reason,
             retry_number=0,
         )
-        self.task = asyncio.create_task(self._run(self.generation))
+        initial_delay = self.delay if delay is None else delay
+        self.task = asyncio.create_task(self._run(self.generation, initial_delay))
         self.adapter.publish(self.diag)
 
     def close(self):
@@ -40,10 +41,10 @@ class Reconciler:
         if self.task:
             self.task.cancel()
 
-    async def _run(self, token):
+    async def _run(self, token, initial_delay):
         repaired = False
         try:
-            await asyncio.sleep(self.delay)
+            await asyncio.sleep(initial_delay)
             for attempt in range(3):
                 check, owners = await self.adapter.inspect()
                 if token != self.generation:

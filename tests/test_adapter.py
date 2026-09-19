@@ -626,3 +626,75 @@ async def test_recovery_during_guard_remains_a_noop(rig):
     rig.before_service = recover
     assert not await a.repair(check.commands[0], owners, lambda: True)
     assert not rig.lights()
+
+
+@pytest.mark.asyncio
+async def test_hlm_protection_release_schedules_immediate_reconciliation(rig):
+    a, _args = adapter_for(rig)
+    a.started = True
+    calls = []
+
+    def schedule(reason, *, delay=None):
+        calls.append((reason, delay))
+
+    a.runner.schedule = schedule
+    entity = "light.living_room_living_room_right_cabinet_lights"
+    rig.set(
+        "sensor.home_lighting_manager_shadow_health",
+        "observing",
+        {
+            "command_authority": False,
+            "manual_precedence_entities": [entity],
+            "reconciliation_protected_entities": [entity],
+        },
+    )
+    unsub = rig.hass.bus.async_listen(EVENT_STATE_CHANGED, a.changed)
+    rig.set(
+        "sensor.home_lighting_manager_shadow_health",
+        "observing",
+        {
+            "command_authority": False,
+            "manual_precedence_entities": [entity],
+            "reconciliation_protected_entities": [],
+        },
+    )
+    await rig.hass.async_block_till_done()
+    unsub()
+
+    assert calls == [("sensor.home_lighting_manager_shadow_health", 0)]
+
+
+@pytest.mark.asyncio
+async def test_hlm_protection_addition_keeps_normal_reconciliation_debounce(rig):
+    a, _args = adapter_for(rig)
+    a.started = True
+    calls = []
+
+    def schedule(reason, *, delay=None):
+        calls.append((reason, delay))
+
+    a.runner.schedule = schedule
+    entity = "light.living_room_living_room_right_cabinet_lights"
+    rig.set(
+        "sensor.home_lighting_manager_shadow_health",
+        "observing",
+        {
+            "command_authority": False,
+            "manual_precedence_entities": [entity],
+            "reconciliation_protected_entities": [],
+        },
+    )
+    unsub = rig.hass.bus.async_listen(EVENT_STATE_CHANGED, a.changed)
+    rig.set(
+        "sensor.home_lighting_manager_shadow_health",
+        "observing",
+        {
+            "command_authority": False,
+            "manual_precedence_entities": [entity],
+            "reconciliation_protected_entities": [entity],
+        },
+    )
+    await rig.hass.async_block_till_done()
+    unsub()
+
+    assert calls == [("sensor.home_lighting_manager_shadow_health", None)]

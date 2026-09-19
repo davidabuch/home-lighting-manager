@@ -147,3 +147,14 @@ def test_reconciliation_protected_entities_reports_only_exposed_manual_layers():
     )
 
     assert runtime.reconciliation_protected_entities({entity, other}) == ()
+
+
+@pytest.mark.asyncio
+async def test_schedule_delay_override_bypasses_normal_debounce():
+    a = FakeAdapter()
+    r = Reconciler(a, delay=60, retry_delay=0)
+    r.schedule("sensor.home_lighting_manager_shadow_health", delay=0)
+    await asyncio.wait_for(r.task, timeout=1)
+    assert len(a.sent) == 1
+    assert r.diag["repair_count_today"] == 1
+    assert r.diag["pending_reconciliation"] is False

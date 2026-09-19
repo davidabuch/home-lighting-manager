@@ -223,6 +223,7 @@ class Adapter:
             return
         entity = event.data["entity_id"]
         old, new = event.data.get("old_state"), event.data.get("new_state")
+        immediate = False
         if entity in TRANSIENTS or entity in EVALUATORS:
             if old and new and old.attributes.get("current") == new.attributes.get("current"):
                 return
@@ -237,6 +238,19 @@ class Adapter:
                     == new.attributes.get("reconciliation_protected_entities")
                 ):
                     return
+                if old and new:
+                    old_protected = set(
+                        old.attributes.get("reconciliation_protected_entities") or ()
+                    )
+                    new_protected = set(
+                        new.attributes.get("reconciliation_protected_entities") or ()
+                    )
+                    # First-OFF releases Manual and exposes the automatic layer.
+                    # That handoff is homeowner-visible and must not wait behind
+                    # the ordinary 30-second drift debounce. The repair path still
+                    # re-resolves ownership and verifies the discrepancy before
+                    # every guarded command.
+                    immediate = bool(old_protected - new_protected)
             elif entity.endswith("_last_recall"):
                 surface = entity.removeprefix("sensor.").removesuffix("_last_recall")
                 guard = self.hass.states.get("input_boolean.home_lighting_ha_guard_" + surface)
@@ -271,7 +285,7 @@ class Adapter:
             pass
         else:
             return
-        self.runner.schedule(entity)
+        self.runner.schedule(entity, delay=0 if immediate else None)
 
 
 async def async_setup(hass, config):

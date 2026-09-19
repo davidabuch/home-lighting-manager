@@ -151,3 +151,118 @@ async def test_deferred_leaf_promotes_after_window_when_no_exact_group_resolves(
     finally:
         await observer.async_shutdown()
         await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_repeated_same_leaf_updates_do_not_restart_deferred_promotion(tmp_path):
+    """Hue transition steps coalesce to the latest appearance without starving intent."""
+
+    leaf, other, group = "light.leaf", "light.other", "light.room"
+    hass, observer = await observer_for(tmp_path, [leaf, other, group])
+    scheduled = []
+
+    def fake_call_later(_hass, _delay, action):
+        cancelled = False
+
+        def cancel():
+            nonlocal cancelled
+            cancelled = True
+
+        scheduled.append((action, lambda: cancelled))
+        return cancel
+
+    try:
+        await seed_group(hass, group, (leaf, other))
+        with patch(
+            "custom_components.home_lighting_manager.promotion_observer.async_call_later",
+            side_effect=fake_call_later,
+        ):
+            hass.states.async_set(leaf, "on", {"brightness": 120})
+            await hass.async_block_till_done()
+            hass.states.async_set(
+                group,
+                "on",
+                {"entity_id": [leaf, other], "brightness": 60},
+            )
+            await hass.async_block_till_done()
+
+            assert len(scheduled) == 1
+            callback, was_cancelled = scheduled[0]
+            assert not was_cancelled()
+
+            # Hue reports the same slider operation again before the window closes.
+            hass.states.async_set(leaf, "on", {"brightness": 90})
+            await hass.async_block_till_done()
+            hass.states.async_set(
+                group,
+                "on",
+                {"entity_id": [leaf, other], "brightness": 45},
+            )
+            await hass.async_block_till_done()
+
+            assert len(scheduled) == 1
+            assert not was_cancelled()
+            callback(dt_util.now() + timedelta(seconds=3))
+            await hass.async_block_till_done()
+
+        layer = observer.runtime.engine.resolve(leaf).layer
+        assert layer is not None and layer.kind is LayerKind.MANUAL
+        assert observer.runtime.engine.resolve(leaf).appearance.brightness == 90
+        assert observer.runtime.operations.latest_homeowner["reason"] == (
+            "shadow Manual appearance recorded"
+        )
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_different_newer_leaf_operation_still_cancels_deferred_promotion(tmp_path):
+    """An OFF supersedes a provisional appearance instead of being coalesced with it."""
+
+    leaf, other, group = "light.leaf", "light.other", "light.room"
+    hass, observer = await observer_for(tmp_path, [leaf, other, group])
+    scheduled = []
+
+    def fake_call_later(_hass, _delay, action):
+        cancelled = False
+
+        def cancel():
+            nonlocal cancelled
+            cancelled = True
+
+        scheduled.append((action, lambda: cancelled))
+        return cancel
+
+    try:
+        await seed_group(hass, group, (leaf, other))
+        with patch(
+            "custom_components.home_lighting_manager.promotion_observer.async_call_later",
+            side_effect=fake_call_later,
+        ):
+            hass.states.async_set(leaf, "on", {"brightness": 120})
+            await hass.async_block_till_done()
+            hass.states.async_set(
+                group,
+                "on",
+                {"entity_id": [leaf, other], "brightness": 60},
+            )
+            await hass.async_block_till_done()
+
+            first_callback, first_cancelled = scheduled[0]
+            hass.states.async_set(leaf, "off")
+            await hass.async_block_till_done()
+            hass.states.async_set(
+                group,
+                "on",
+                {"entity_id": [leaf, other], "brightness": 60},
+            )
+            await hass.async_block_till_done()
+
+            assert first_cancelled()
+            first_callback(dt_util.now() + timedelta(seconds=3))
+            await hass.async_block_till_done()
+            assert observer.runtime.engine.resolve(leaf).layer is None
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()

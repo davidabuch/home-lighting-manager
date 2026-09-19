@@ -29,7 +29,6 @@ from .intent_policy import (
 from .operations import HomeownerOperation, MemberOutcome, OperationResult
 from .shadow import ShadowDecision, ShadowObservation
 
-
 _SURFACE_GUARDS: tuple[tuple[str, str], ...] = (
     ("light.holiday_main_area", "input_boolean.home_lighting_ha_guard_main_area"),
     ("light.front_eve_zone", "input_boolean.home_lighting_ha_guard_front_eve"),

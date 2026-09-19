@@ -155,13 +155,21 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         if isinstance(dynamics, str) and dynamics not in ("", "none"):
             return "active Hue dynamics are automatic scene telemetry"
 
-        for aggregate_id, guard_id in _SURFACE_GUARDS:
-            members = self._topology_members.get(aggregate_id, ())
-            if entity_id not in members:
-                continue
+        matching_guards = [
+            guard_id
+            for aggregate_id, guard_id in _SURFACE_GUARDS
+            if entity_id in self._topology_members.get(aggregate_id, ())
+        ]
+        if not matching_guards and entity_id in self.manual_precedence:
+            # Startup or sparse Hue telemetry can precede aggregate membership.
+            # A short active manager guard is then sufficient negative evidence:
+            # ambiguity must fail closed rather than manufacture Manual ownership.
+            matching_guards = [guard_id for _, guard_id in _SURFACE_GUARDS]
+
+        for guard_id in matching_guards:
             guard = self.hass.states.get(guard_id)
             if guard is not None and guard.state == "on":
-                return f"matching HA command guard is active: {guard_id}"
+                return f"HA command guard is active: {guard_id}"
         return None
 
     @callback

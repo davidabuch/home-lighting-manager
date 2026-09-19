@@ -27,6 +27,65 @@ from .operations import HomeownerOperation, MemberOutcome, OperationResult
 from .shadow import ShadowDecision, ShadowObservation
 
 
+# Context-less Hue telemetry may arrive without the Home Assistant service-call
+# context that caused it. Surface-scoped HA guards are therefore authoritative
+# negative evidence while a manager-owned command is in flight. Keep this
+# mapping deliberately narrow to the commissioned lighting surfaces; do not
+# suppress an unrelated homeowner command merely because another surface is busy.
+_SURFACE_GUARDS: tuple[tuple[str, frozenset[str]], ...] = (
+    (
+        "input_boolean.home_lighting_ha_guard_main_area",
+        frozenset(
+            {
+                "light.kitchen_kitchen_left_cabinet_light",
+                "light.kitchen_kitchen_right_cabinet_lights",
+                "light.living_room_living_room_left_cabinets",
+                "light.living_room_living_room_right_cabinet_lights",
+                "light.living_room_liquor_cabinet_light",
+                "light.living_room_left_ceiling_light",
+                "light.living_room_living_room_right_ceiling",
+                "light.holiday_main_area",
+            }
+        ),
+    ),
+    (
+        "input_boolean.home_lighting_ha_guard_front_eve",
+        frozenset(
+            {
+                "light.front_yard_front_eve_lights",
+                "light.front_eve_zone",
+            }
+        ),
+    ),
+    (
+        "input_boolean.home_lighting_ha_guard_path",
+        frozenset(
+            {
+                "light.front_yard_front_path_light_1",
+                "light.front_yard_front_yard_path_light_2",
+                "light.front_yard_front_yard_path_light_3",
+                "light.front_yard_front_yard_path_light_4",
+                "light.front_yard_front_yard_path_light_5",
+                "light.front_yard_front_yard_path_light_6",
+                "light.driveway_path_lights",
+                "light.holiday_path",
+            }
+        ),
+    ),
+    (
+        "input_boolean.home_lighting_ha_guard_backyard",
+        frozenset(
+            {
+                "light.backyard",
+                "light.backyard_backyard",
+                "light.holiday_backyard",
+                "light.backyard_spa_strip_lights",
+            }
+        ),
+    ),
+)
+
+
 @dataclass(frozen=True)
 class _PendingExternalLeaf:
     """Original context-less leaf observation retained for one short correlation window."""
@@ -87,8 +146,21 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         observed_at = dt_util.now()
         self._snapshot_group_topology_for_burst(observed_at)
         members = self._member_entity_ids_for_event(observation.entity_id, new_state)
+        suppression_reason = self._automatic_telemetry_suppression_reason(
+            observation.entity_id,
+            new_state,
+            members,
+        )
+        if suppression_reason is not None:
+            # Preserve topology diagnostics, but never retain this event as a
+            # candidate homeowner leaf. A later Hue aggregate must not be able
+            # to promote manager-owned or dynamic-scene telemetry into Manual.
+            self._pending_external_leaves.pop(observation.entity_id, None)
+            self._cancel_pending_single_for_entities((observation.entity_id,))
+
         if (
-            not members
+            suppression_reason is None
+            and not members
             and observation.evidence.kind is IntentEvidenceKind.UNKNOWN
             and observation.operation in ("appearance", "off")
             and (observation.operation == "off" or observation.appearance is not None)
@@ -114,6 +186,15 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         candidate = burst.get("external_intent_candidate")
         if not isinstance(candidate, dict):
             return
+        if suppression_reason is not None and candidate.get("qualified") is True:
+            candidate.update(
+                {
+                    "promoted_to_homeowner": False,
+                    "manual_ownership_recorded": False,
+                    "promotion_reason": suppression_reason,
+                }
+            )
+            return
         if candidate.get("qualified") is True:
             self._promote_single_candidate(
                 candidate,
@@ -127,6 +208,26 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             current_entity_id=observation.entity_id,
             burst_topology=self._external_group_burst_topology,
         )
+
+    @callback
+    def _automatic_telemetry_suppression_reason(
+        self,
+        entity_id: str,
+        new_state: State,
+        members: tuple[str, ...],
+    ) -> str | None:
+        """Return fail-closed negative evidence for known automatic Hue telemetry."""
+        if new_state.attributes.get("dynamics") == "dynamic_palette":
+            return "Hue dynamic-palette telemetry is automatic, not homeowner intent"
+
+        involved = frozenset((entity_id, *members))
+        for guard_entity, surface_entities in _SURFACE_GUARDS:
+            if involved.isdisjoint(surface_entities):
+                continue
+            guard = self.hass.states.get(guard_entity)
+            if guard is not None and guard.state == "on":
+                return f"manager HA guard active: {guard_entity}"
+        return None
 
     @callback
     def _snapshot_group_topology_for_burst(self, observed_at: datetime) -> None:

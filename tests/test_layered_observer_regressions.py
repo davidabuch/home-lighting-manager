@@ -401,3 +401,58 @@ async def test_hue_dynamic_palette_churn_does_not_create_manual(tmp_path):
     finally:
         await observer.async_shutdown()
         await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_unrelated_backyard_churn_does_not_poison_main_area_first_off(tmp_path):
+    """A nearby external burst on another surface must not block first-OFF release."""
+
+    cabinet = "light.living_room_living_room_right_cabinet_lights"
+    main_group = "light.holiday_main_area"
+    backyard_leaf = "light.backyard_behind_pool_6"
+    backyard_group = "light.holiday_backyard"
+    hass, observer = await observer_for(
+        tmp_path,
+        [cabinet, main_group, backyard_leaf, backyard_group],
+    )
+    try:
+        await seed_group(hass, main_group, (cabinet,))
+        await seed_group(hass, backyard_group, (backyard_leaf,))
+
+        # Establish a legitimate homeowner Manual appearance on Main Area.
+        hass.states.async_set(
+            cabinet,
+            "on",
+            {"brightness": 87, "dynamics": "none"},
+            context=Context(user_id="homeowner"),
+        )
+        await hass.async_block_till_done()
+        assert observer.runtime.engine.resolve(cabinet).layer.kind is LayerKind.MANUAL
+
+        # Unrelated Hue animation churn occurs immediately before the homeowner OFF.
+        hass.states.async_set(
+            backyard_leaf,
+            "on",
+            {"brightness": 200, "dynamics": "dynamic_palette"},
+        )
+        await hass.async_block_till_done()
+        hass.states.async_set(
+            backyard_group,
+            "on",
+            {"entity_id": [backyard_leaf], "dynamics": "dynamic_palette"},
+        )
+        await hass.async_block_till_done()
+
+        # Main Area first OFF plus its aggregate propagation must form a fresh burst.
+        hass.states.async_set(cabinet, "off", {"dynamics": "none"})
+        await hass.async_block_till_done()
+        hass.states.async_set(main_group, "on", {"entity_id": [cabinet]})
+        await hass.async_block_till_done()
+
+        assert observer.runtime.engine.resolve(cabinet).layer is None
+        assert observer.runtime.operations.latest_homeowner["reason"] == "released_manual"
+        attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
+        assert attrs["command_authority"] is False
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()

@@ -95,8 +95,10 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             return
 
         observed_at = dt_util.now()
-        self._snapshot_group_topology_for_burst(observed_at)
         members = self._member_entity_ids_for_event(observation.entity_id, new_state)
+        if not members:
+            self._reset_external_burst_for_cross_surface_leaf(observation.entity_id)
+        self._snapshot_group_topology_for_burst(observed_at)
         automatic_reason = (
             self._automatic_external_evidence_reason(observation.entity_id, new_state)
             if not members
@@ -145,6 +147,39 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             current_entity_id=observation.entity_id,
             burst_topology=self._external_group_burst_topology,
         )
+
+    @callback
+    def _reset_external_burst_for_cross_surface_leaf(self, entity_id: str) -> None:
+        """Do not let unrelated surface churn poison one homeowner correlation window."""
+        burst = self._external_burst
+        if not isinstance(burst, dict):
+            return
+        prior_leaves = _string_tuple(burst.get("leaf_entities"))
+        if not prior_leaves or entity_id in prior_leaves:
+            return
+
+        current_surfaces = self._commissioned_surfaces_for_entity(entity_id)
+        if not current_surfaces:
+            return
+        prior_surfaces = set()
+        for prior in prior_leaves:
+            prior_surfaces.update(self._commissioned_surfaces_for_entity(prior))
+        if not prior_surfaces or current_surfaces & prior_surfaces:
+            return
+
+        self._external_correlator.reset()
+        self._external_burst = None
+        self._external_group_burst_topology = {}
+        self._external_group_last_observed_at = None
+
+    @callback
+    def _commissioned_surfaces_for_entity(self, entity_id: str) -> set[str]:
+        """Return the narrow commissioned ownership surfaces containing one leaf."""
+        return {
+            aggregate_id
+            for aggregate_id, _guard_id in _SURFACE_GUARDS
+            if entity_id in self._topology_members.get(aggregate_id, ())
+        }
 
     @callback
     def _automatic_external_evidence_reason(

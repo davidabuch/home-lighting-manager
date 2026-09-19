@@ -133,6 +133,12 @@ class ExternalBurstCorrelator:
         self._last_timestamp: datetime | None = None
         self._overflow = False
 
+    def reset(self) -> None:
+        """Discard the current correlation burst without changing policy."""
+        self._events.clear()
+        self._last_timestamp = None
+        self._overflow = False
+
     def observe(self, event: ExternalTopologyEvent) -> ExternalBurstSummary:
         if self._events:
             delta = (event.timestamp - self._last_timestamp).total_seconds()

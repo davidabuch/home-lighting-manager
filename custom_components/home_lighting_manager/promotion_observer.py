@@ -15,7 +15,10 @@ from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.helpers.event import async_call_later
 from homeassistant.util import dt as dt_util
 
-from .attribution_correlation import (\n    ExternalBurstTopology,\n    resolve_unique_exact_group,\n)
+from .attribution_correlation import (
+    ExternalBurstTopology,
+    resolve_unique_exact_group,
+)
 from .ha_observer import EXTERNAL_BURST_WINDOW_SECONDS, HomeAssistantShadowObserver
 from .intent_policy import (
     IntentAttributionSource,

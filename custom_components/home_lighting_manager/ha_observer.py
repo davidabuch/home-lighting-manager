@@ -47,6 +47,7 @@ RUNTIME_DATA_KEY = f"{DOMAIN}_shadow_runtime"
 DIAGNOSTIC_ENTITY_ID = "sensor.home_lighting_manager_shadow_health"
 EVIDENCE_LEDGER_SIZE = 12
 EXTERNAL_BURST_WINDOW_SECONDS = 2.0
+NIGHTLY_BOUNDARY_SETTLE_SECONDS = 15.0
 
 CONFIG_SCHEMA = vol.Schema(
     {
@@ -88,6 +89,7 @@ class HomeAssistantShadowObserver:
         )
         self._external_burst: dict[str, object] | None = None
         self._topology_members: dict[str, tuple[str, ...]] = {}
+        self._nightly_boundary_settle_until: datetime | None = None
 
     async def async_start(self) -> None:
         """Load trusted evidence and begin observation without command authority."""
@@ -286,9 +288,21 @@ class HomeAssistantShadowObserver:
         return ()
 
     @callback
-    def _handle_nightly_boundary(self, _now: datetime) -> None:
+    def _handle_nightly_boundary(self, now: datetime) -> None:
+        self._nightly_boundary_settle_until = now + timedelta(
+            seconds=NIGHTLY_BOUNDARY_SETTLE_SECONDS
+        )
         self.runtime.engine.expire_boundary(NIGHTLY_BOUNDARY)
         self.hass.async_create_task(self.async_save())
+
+    @callback
+    def _nightly_boundary_settling(self, now: datetime | None = None) -> bool:
+        """Return whether late Hue telemetry is still inside the 01:59 settling window."""
+        settle_until = self._nightly_boundary_settle_until
+        if settle_until is None:
+            return False
+        current = dt_util.now() if now is None else now
+        return current <= settle_until
 
     async def _async_started_event(self, _event: Event) -> None:
         """Refresh topology when HA startup completion is observed."""
@@ -342,6 +356,13 @@ class HomeAssistantShadowObserver:
             "recent_evidence": list(self._evidence_ledger),
             "external_burst_window_seconds": EXTERNAL_BURST_WINDOW_SECONDS,
             "external_burst": self._external_burst,
+            "nightly_boundary_settle_seconds": NIGHTLY_BOUNDARY_SETTLE_SECONDS,
+            "nightly_boundary_settling": self._nightly_boundary_settling(),
+            "nightly_boundary_settle_until": (
+                self._nightly_boundary_settle_until.isoformat()
+                if self._nightly_boundary_settle_until is not None
+                else None
+            ),
             "topology_aggregate_count": len(self._topology_members),
             "topology_member_count": sum(
                 len(members) for members in self._topology_members.values()

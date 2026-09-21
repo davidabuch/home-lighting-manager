@@ -77,6 +77,19 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         await super().async_shutdown()
 
     @callback
+    def _handle_nightly_boundary(self, now: datetime) -> None:
+        """Expire homeowner state and invalidate provisional pre-boundary intent."""
+        for cancel in tuple(self._pending_single_promotions.values()):
+            cancel()
+        self._pending_single_promotions.clear()
+        self._pending_external_leaves.clear()
+        self._external_correlator.reset()
+        self._external_burst = None
+        self._external_group_burst_topology = {}
+        self._external_group_last_observed_at = None
+        super()._handle_nightly_boundary(now)
+
+    @callback
     def _record_external_topology(
         self, observation: ShadowObservation, new_state: State
     ) -> None:
@@ -191,6 +204,12 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         self, entity_id: str, new_state: State
     ) -> str | None:
         """Return why context-less leaf telemetry must not be promoted as homeowner intent."""
+        if (
+            entity_id in self.manual_precedence
+            and self._nightly_boundary_settling()
+        ):
+            return "nightly 01:59 boundary settling; ambiguous Hue telemetry defaults to HLM"
+
         dynamics = new_state.attributes.get("dynamics")
         if isinstance(dynamics, str) and dynamics not in ("", "none"):
             return "active Hue dynamics are automatic scene telemetry"

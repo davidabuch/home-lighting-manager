@@ -456,3 +456,89 @@ async def test_unrelated_backyard_churn_does_not_poison_main_area_first_off(tmp_
     finally:
         await observer.async_shutdown()
         await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_nightly_boundary_quarantines_late_contextless_hue_rebound(tmp_path):
+    """A late Hue rebound after 01:59 must not recreate expired Manual ownership."""
+    from datetime import timedelta
+
+    from homeassistant.util import dt as dt_util
+
+    leaf, group = (
+        "light.kitchen_kitchen_left_cabinet_light",
+        "light.holiday_main_area",
+    )
+    hass, observer = await observer_for(tmp_path, [leaf, group])
+    try:
+        await seed_group(hass, group, (leaf,), state="on")
+        boundary = dt_util.now()
+        observer._handle_nightly_boundary(boundary)
+        await hass.async_block_till_done()
+
+        rebound = boundary + timedelta(seconds=10)
+        with (
+            patch(
+                "custom_components.home_lighting_manager.ha_observer.dt_util.now",
+                return_value=rebound,
+            ),
+            patch(
+                "custom_components.home_lighting_manager.promotion_observer.dt_util.now",
+                return_value=rebound,
+            ),
+        ):
+            hass.states.async_set(
+                leaf,
+                "on",
+                {
+                    "brightness": 255,
+                    "color_temp_kelvin": 2724,
+                    "dynamics": "none",
+                },
+            )
+            await hass.async_block_till_done()
+            hass.states.async_set(group, "on", {"entity_id": [leaf]})
+            await hass.async_block_till_done()
+
+            assert observer.runtime.engine.resolve(leaf).layer is None
+            attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
+            assert attrs["nightly_boundary_settling"] is True
+            assert leaf not in attrs["reconciliation_protected_entities"]
+
+        # The quarantine is bounded: a genuinely new command later remains eligible.
+        after_settle = boundary + timedelta(seconds=16)
+        with (
+            patch(
+                "custom_components.home_lighting_manager.ha_observer.dt_util.now",
+                return_value=after_settle,
+            ),
+            patch(
+                "custom_components.home_lighting_manager.promotion_observer.dt_util.now",
+                return_value=after_settle,
+            ),
+        ):
+            hass.states.async_set(
+                leaf,
+                "on",
+                {
+                    "brightness": 180,
+                    "color_temp_kelvin": 3000,
+                    "dynamics": "none",
+                },
+            )
+            await hass.async_block_till_done()
+            hass.states.async_set(
+                group,
+                "on",
+                {"entity_id": [leaf], "brightness": 180},
+            )
+            await hass.async_block_till_done()
+
+            layer = observer.runtime.engine.resolve(leaf).layer
+            assert layer is not None and layer.kind is LayerKind.MANUAL
+            attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
+            assert attrs["nightly_boundary_settling"] is False
+            assert leaf in attrs["reconciliation_protected_entities"]
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()

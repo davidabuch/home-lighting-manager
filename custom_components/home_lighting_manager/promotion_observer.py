@@ -214,6 +214,22 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         if isinstance(dynamics, str) and dynamics not in ("", "none"):
             return "active Hue dynamics are automatic scene telemetry"
 
+        single_member_surfaces = [
+            aggregate_id
+            for aggregate_id, _guard_id in _SURFACE_GUARDS
+            if self._topology_members.get(aggregate_id) == (entity_id,)
+        ]
+        if entity_id in self.manual_precedence and single_member_surfaces:
+            # A one-member aggregate repeats the same physical transition; it is not
+            # independent corroboration that the leaf change was a homeowner command.
+            # Festavia/front-eve recovery has produced this exact leaf+aggregate shape.
+            # With no HA user/context receipt, the Ownership Contract requires ambiguity
+            # to fail closed to HLM rather than manufacture Manual ownership.
+            return (
+                "single-member commissioned surface has no independent topology "
+                "corroboration; ambiguous external telemetry defaults to HLM"
+            )
+
         matching_guards = [
             guard_id
             for aggregate_id, guard_id in _SURFACE_GUARDS

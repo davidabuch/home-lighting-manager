@@ -36,6 +36,12 @@ _SURFACE_GUARDS: tuple[tuple[str, str], ...] = (
     ("light.holiday_backyard", "input_boolean.home_lighting_ha_guard_backyard"),
 )
 
+# Front Eve is one physical Festavia leaf behind a one-member Hue aggregate. The
+# aggregate repeats the same bridge telemetry and therefore cannot independently
+# corroborate a context-less leaf command. Direct HA user context and genuine raw
+# Hue scene recall remain separate high-confidence homeowner evidence paths.
+_CONTEXTLESS_SINGLE_MEMBER_SURFACES = frozenset({"light.front_eve_zone"})
+
 
 @dataclass(frozen=True)
 class _PendingExternalLeaf:
@@ -255,6 +261,27 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         """Promote a leaf immediately unless a pre-known group burst may still resolve."""
         entity_id = candidate.get("entity_id")
         if not isinstance(entity_id, str):
+            return
+
+        if (
+            current_entity_id in _CONTEXTLESS_SINGLE_MEMBER_SURFACES
+            and members == (entity_id,)
+        ):
+            # A one-member Hue aggregate is propagation of the same physical receipt,
+            # not independent evidence that a context-less leaf transition was homeowner
+            # intent. The 2026-09-22 Front Eve rebound had exactly this topology.
+            self._pending_external_leaves.pop(entity_id, None)
+            self._cancel_pending_single_for_entities((entity_id,))
+            candidate.update(
+                {
+                    "promoted_to_homeowner": False,
+                    "manual_ownership_recorded": False,
+                    "promotion_reason": (
+                        "single-member Front Eve aggregate is not independent "
+                        "homeowner corroboration"
+                    ),
+                }
+            )
             return
 
         # A later leaf command needs fresh aggregate corroboration. Reusing the burst start

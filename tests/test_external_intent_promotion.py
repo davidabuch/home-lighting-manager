@@ -229,3 +229,77 @@ async def test_same_external_burst_is_promoted_only_once(tmp_path):
 
     await observer.async_shutdown()
     await hass.async_block_till_done()
+
+
+
+@pytest.mark.asyncio
+async def test_front_eve_one_member_rebound_does_not_promote_manual(tmp_path):
+    """Front Eve leaf+one-member aggregate is one ambiguous receipt, not two proofs."""
+    from homeassistant.core import HomeAssistant
+
+    from custom_components.home_lighting_manager.ha_observer import DIAGNOSTIC_ENTITY_ID
+    from custom_components.home_lighting_manager.promotion_observer import (
+        PromotingHomeAssistantShadowObserver,
+    )
+
+    hass = HomeAssistant(str(tmp_path))
+    hass.config.time_zone = "America/Los_Angeles"
+
+    leaf = "light.front_yard_front_eve_lights"
+    group = "light.front_eve_zone"
+    hass.states.async_set(leaf, "off")
+    hass.states.async_set(
+        group,
+        "off",
+        {"entity_id": [leaf]},
+        context=__import__("homeassistant.core", fromlist=["Context"]).Context(
+            parent_id="topology-seed"
+        ),
+    )
+
+    observer = PromotingHomeAssistantShadowObserver(
+        hass,
+        [leaf, group],
+        {leaf: 250},
+    )
+    await observer.async_start()
+
+    hass.states.async_set(
+        leaf,
+        "on",
+        {
+            "brightness": 165,
+            "color_temp_kelvin": 2724,
+            "effect": "off",
+            "dynamics": "none",
+        },
+    )
+    await hass.async_block_till_done()
+    hass.states.async_set(
+        group,
+        "on",
+        {
+            "entity_id": [leaf],
+            "brightness": 165,
+            "color_temp_kelvin": 2724,
+        },
+    )
+    await hass.async_block_till_done()
+
+    assert observer.runtime.engine.resolve(leaf).layer is None
+    assert observer.runtime.diagnostics().homeowner_events == 0
+
+    health = hass.states.get(DIAGNOSTIC_ENTITY_ID)
+    assert health is not None
+    candidate = health.attributes["external_burst"]["external_intent_candidate"]
+    assert candidate["qualified"] is True
+    assert candidate["entity_id"] == leaf
+    assert candidate["promoted_to_homeowner"] is False
+    assert candidate["manual_ownership_recorded"] is False
+    assert candidate["promotion_reason"] == (
+        "single-member Front Eve aggregate is not independent homeowner corroboration"
+    )
+    assert health.attributes["reconciliation_protected_entities"] == []
+
+    await observer.async_shutdown()
+    await hass.async_block_till_done()

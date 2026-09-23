@@ -505,7 +505,8 @@ async def test_nightly_boundary_quarantines_late_contextless_hue_rebound(tmp_pat
             assert attrs["nightly_boundary_settling"] is True
             assert leaf not in attrs["reconciliation_protected_entities"]
 
-        # The quarantine is bounded: a genuinely new command later remains eligible.
+        # The short settling timer may end, but ambiguous topology remains blocked
+        # for the entire post-boundary OFF epoch. A direct HA-user receipt is affirmative.
         after_settle = boundary + timedelta(seconds=16)
         with (
             patch(
@@ -525,12 +526,7 @@ async def test_nightly_boundary_quarantines_late_contextless_hue_rebound(tmp_pat
                     "color_temp_kelvin": 3000,
                     "dynamics": "none",
                 },
-            )
-            await hass.async_block_till_done()
-            hass.states.async_set(
-                group,
-                "on",
-                {"entity_id": [leaf], "brightness": 180},
+                context=Context(user_id="homeowner"),
             )
             await hass.async_block_till_done()
 
@@ -538,6 +534,7 @@ async def test_nightly_boundary_quarantines_late_contextless_hue_rebound(tmp_pat
             assert layer is not None and layer.kind is LayerKind.MANUAL
             attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
             assert attrs["nightly_boundary_settling"] is False
+            assert leaf not in attrs["post_boundary_off_entities"]
             assert leaf in attrs["reconciliation_protected_entities"]
     finally:
         await observer.async_shutdown()

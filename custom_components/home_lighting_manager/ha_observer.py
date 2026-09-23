@@ -90,6 +90,7 @@ class HomeAssistantShadowObserver:
         self._external_burst: dict[str, object] | None = None
         self._topology_members: dict[str, tuple[str, ...]] = {}
         self._nightly_boundary_settle_until: datetime | None = None
+        self._post_boundary_off_entities: set[str] = set()
 
     async def async_start(self) -> None:
         """Load trusted evidence and begin observation without command authority."""
@@ -98,6 +99,11 @@ class HomeAssistantShadowObserver:
         self.runtime = ShadowRuntime(generation=generation, managed_entities=self.entity_ids)
 
         if isinstance(raw, dict):
+            self._post_boundary_off_entities = {
+                entity_id
+                for entity_id in raw.get("post_boundary_off_entities", [])
+                if isinstance(entity_id, str) and entity_id in self.manual_precedence
+            }
             persisted = deserialize_state(raw)
             saved_at = _parse_saved_at(raw.get("saved_at"))
             now = dt_util.now()
@@ -153,6 +159,9 @@ class HomeAssistantShadowObserver:
         payload = self.runtime.export_persistence()
         payload["generation"] = self.runtime.engine.generation
         payload["saved_at"] = dt_util.now().isoformat()
+        payload["post_boundary_off_entities"] = sorted(
+            self._post_boundary_off_entities
+        )
         await self.store.async_save(payload)
         self._storage_status = "saved"
         self._publish_diagnostics()
@@ -292,8 +301,24 @@ class HomeAssistantShadowObserver:
         self._nightly_boundary_settle_until = now + timedelta(
             seconds=NIGHTLY_BOUNDARY_SETTLE_SECONDS
         )
+        self._post_boundary_off_entities = set(self.manual_precedence)
         self.runtime.engine.expire_boundary(NIGHTLY_BOUNDARY)
         self.hass.async_create_task(self.async_save())
+
+    @callback
+    def _clear_post_boundary_off_for_entity(self, entity_id: str) -> None:
+        """Re-open homeowner correlation only after affirmative post-boundary evidence."""
+        self._post_boundary_off_entities.discard(entity_id)
+
+    @callback
+    def _clear_post_boundary_off_for_members(self, entity_ids: tuple[str, ...]) -> None:
+        """Clear the persisted OFF epoch for positively established members."""
+        self._post_boundary_off_entities.difference_update(entity_ids)
+
+    @callback
+    def _in_post_boundary_off_epoch(self, entity_id: str) -> bool:
+        """Return whether ambiguous external telemetry must still fail closed."""
+        return entity_id in self._post_boundary_off_entities
 
     @callback
     def _nightly_boundary_settling(self, now: datetime | None = None) -> bool:
@@ -363,6 +388,7 @@ class HomeAssistantShadowObserver:
                 if self._nightly_boundary_settle_until is not None
                 else None
             ),
+            "post_boundary_off_entities": sorted(self._post_boundary_off_entities),
             "topology_aggregate_count": len(self._topology_members),
             "topology_member_count": sum(
                 len(members) for members in self._topology_members.values()

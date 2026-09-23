@@ -505,7 +505,8 @@ async def test_nightly_boundary_quarantines_late_contextless_hue_rebound(tmp_pat
             assert attrs["nightly_boundary_settling"] is True
             assert leaf not in attrs["reconciliation_protected_entities"]
 
-        # The quarantine is bounded: a genuinely new command later remains eligible.
+        # The short settling timer may end, but ambiguous topology remains blocked
+        # for the entire post-boundary OFF epoch. A direct HA-user receipt is affirmative.
         after_settle = boundary + timedelta(seconds=16)
         with (
             patch(
@@ -525,12 +526,7 @@ async def test_nightly_boundary_quarantines_late_contextless_hue_rebound(tmp_pat
                     "color_temp_kelvin": 3000,
                     "dynamics": "none",
                 },
-            )
-            await hass.async_block_till_done()
-            hass.states.async_set(
-                group,
-                "on",
-                {"entity_id": [leaf], "brightness": 180},
+                context=Context(user_id="homeowner"),
             )
             await hass.async_block_till_done()
 
@@ -538,7 +534,73 @@ async def test_nightly_boundary_quarantines_late_contextless_hue_rebound(tmp_pat
             assert layer is not None and layer.kind is LayerKind.MANUAL
             attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
             assert attrs["nightly_boundary_settling"] is False
+            assert leaf not in attrs["post_boundary_off_entities"]
             assert leaf in attrs["reconciliation_protected_entities"]
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_post_boundary_off_epoch_blocks_delayed_contextless_rebound(tmp_path):
+    """A Hue rebound well after the settling timer must not manufacture Manual."""
+    from datetime import timedelta
+    from unittest.mock import patch
+
+    from homeassistant.core import Context
+    from homeassistant.util import dt as dt_util
+
+    leaf, group = (
+        "light.kitchen_kitchen_left_cabinet_light",
+        "light.holiday_main_area",
+    )
+    hass, observer = await observer_for(tmp_path, [leaf, group])
+    try:
+        await seed_group(hass, group, (leaf,), state="on")
+        boundary = dt_util.now()
+        observer._handle_nightly_boundary(boundary)
+        await hass.async_block_till_done()
+
+        # Reproduce the class of failures seen at +10 seconds and +31 minutes.
+        rebound = boundary + timedelta(minutes=31)
+        with (
+            patch(
+                "custom_components.home_lighting_manager.ha_observer.dt_util.now",
+                return_value=rebound,
+            ),
+            patch(
+                "custom_components.home_lighting_manager.promotion_observer.dt_util.now",
+                return_value=rebound,
+            ),
+        ):
+            hass.states.async_set(
+                leaf,
+                "on",
+                {"brightness": 165, "color_temp_kelvin": 2724, "dynamics": "none"},
+            )
+            await hass.async_block_till_done()
+            hass.states.async_set(group, "on", {"entity_id": [leaf]})
+            await hass.async_block_till_done()
+
+        assert observer.runtime.engine.resolve(leaf).layer is None
+        attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
+        assert attrs["nightly_boundary_settling"] is False
+        assert leaf in attrs["post_boundary_off_entities"]
+        assert leaf not in attrs["reconciliation_protected_entities"]
+
+        # Affirmative direct HA-user provenance re-opens the entity immediately.
+        hass.states.async_set(
+            leaf,
+            "on",
+            {"brightness": 190, "dynamics": "none"},
+            context=Context(user_id="homeowner"),
+        )
+        await hass.async_block_till_done()
+        assert leaf not in hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes[
+            "post_boundary_off_entities"
+        ]
+        layer = observer.runtime.engine.resolve(leaf).layer
+        assert layer is not None and layer.kind is LayerKind.MANUAL
     finally:
         await observer.async_shutdown()
         await hass.async_block_till_done()

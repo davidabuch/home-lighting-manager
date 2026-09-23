@@ -101,6 +101,12 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
     ) -> None:
         """Correlate external topology, then promote only qualified exact intent."""
         if (
+            observation.evidence.kind is IntentEvidenceKind.EXPLICIT_HOMEOWNER_COMMAND
+            and observation.evidence.attribution_source
+            is IntentAttributionSource.HOME_ASSISTANT_USER
+        ):
+            self._clear_post_boundary_off_for_entity(observation.entity_id)
+        if (
             observation.evidence.kind is IntentEvidenceKind.AVAILABILITY_CHANGE
             or observation.evidence.has_parent_id
         ):
@@ -215,6 +221,12 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             and self._nightly_boundary_settling()
         ):
             return "nightly 01:59 boundary settling; ambiguous Hue telemetry defaults to HLM"
+
+        if self._in_post_boundary_off_epoch(entity_id):
+            return (
+                "post-boundary OFF epoch requires affirmative homeowner provenance; "
+                "context-less topology is ambiguous"
+            )
 
         dynamics = new_state.attributes.get("dynamics")
         if isinstance(dynamics, str) and dynamics not in ("", "none"):

@@ -862,7 +862,9 @@ async def test_authoritative_manual_scene_group_off_releases_despite_nested_aggr
             return_value=later,
         ):
             for entity in leaves:
-                hass.states.async_set(entity, "off")
+                # Real Hue OFF receipts preserve the prior dynamic-scene marker even
+                # though the light is now off. This must not erase homeowner OFF evidence.
+                hass.states.async_set(entity, "off", {"dynamics": "dynamic_palette"})
                 await hass.async_block_till_done()
 
             # Hue fans the same physical group OFF through several nested aggregates.

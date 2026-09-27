@@ -61,6 +61,16 @@ def same_effective_ownership(current, initial):
     )
 
 
+def same_resolved_owners(current, initial):
+    """Compare resolver policy while ignoring its diagnostic HLM projection echo."""
+    if not isinstance(current, dict) or not isinstance(initial, dict):
+        return current == initial
+    return (
+        {k: v for k, v in current.items() if k != "hlm_effective_ownership"}
+        == {k: v for k, v in initial.items() if k != "hlm_effective_ownership"}
+    )
+
+
 def project_owners(hass, owners, members):
     """Keep automatic eligibility separate from exposed per-member desired state."""
     view = projection(hass)
@@ -139,7 +149,7 @@ async def render(adapter, surface, service, entities, parameters, context, expec
     scenes = entities if service == "scene.turn_on" else []
     members, metadata = await adapter.hue.read(scenes, [surface])
     refreshed = await adapter.owners()
-    if not same_effective_ownership(projection(hass), initial) or refreshed != owners:
+    if not same_effective_ownership(projection(hass), initial) or not same_resolved_owners(refreshed, owners):
         adapter.render_note(surface, "stale_plan", entities)
         return
     group = set(members.get(surface, ()))
@@ -176,7 +186,7 @@ async def render(adapter, surface, service, entities, parameters, context, expec
         current_owners = await adapter.owners()
         return (
             same_effective_ownership(projection(hass), initial)
-            and current_owners == owners
+            and same_resolved_owners(current_owners, owners)
             and adapter.active_scripts() == scripts
         )
 

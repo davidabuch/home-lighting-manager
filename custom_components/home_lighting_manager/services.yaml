@@ -1,0 +1,6 @@
+reset_ownership:
+  name: Reset HLM Ownership
+  description: >-
+    Clear resettable homeowner Manual/Manual-OFF ownership and homeowner-caused
+    session suppressions, invalidate pending group-OFF interaction state, and
+    begin a fresh observation epoch without commanding any lights.

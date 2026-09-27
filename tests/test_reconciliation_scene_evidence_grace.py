@@ -2,8 +2,8 @@ import copy
 
 import pytest
 
-from legacy.custom_components.home_lighting_reconciliation.engine import Check
-from legacy.custom_components.home_lighting_reconciliation.runtime import Reconciler
+from custom_components.home_lighting_reconciliation.engine import Check
+from custom_components.home_lighting_reconciliation.runtime import Reconciler
 
 
 AMBIGUOUS = "different or unknown latest recall; possible Manual intent"

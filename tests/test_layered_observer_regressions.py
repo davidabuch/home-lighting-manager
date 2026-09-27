@@ -814,6 +814,48 @@ async def test_authoritative_manual_scene_group_off_releases_despite_nested_aggr
             for entity in leaves
         )
 
+        # Scene rendering has made these aggregates physically ON before the homeowner
+        # later turns the zone OFF. Parent context keeps this setup from becoming
+        # homeowner ingress on its own.
+        render_context = Context(parent_id="scene-render")
+        for aggregate, aggregate_members in (
+            (main, leaves),
+            (celebration, (*leaves, "light.extra")),
+            (holiday_all, (*leaves, "light.extra_2")),
+            (
+                living,
+                (
+                    "light.living_room_living_room_left_cabinets",
+                    "light.living_room_living_room_right_cabinet_lights",
+                    "light.living_room_left_ceiling_light",
+                    "light.living_room_living_room_right_ceiling",
+                    "light.living_room_liquor_cabinet_light",
+                ),
+            ),
+            (
+                kitchen,
+                (
+                    "light.kitchen_kitchen_left_cabinet_light",
+                    "light.kitchen_kitchen_right_cabinet_lights",
+                    "light.extra_kitchen",
+                ),
+            ),
+            (
+                cabinets,
+                (
+                    "light.kitchen_kitchen_left_cabinet_light",
+                    "light.kitchen_kitchen_right_cabinet_lights",
+                ),
+            ),
+        ):
+            hass.states.async_set(
+                aggregate,
+                "on",
+                {"entity_id": list(aggregate_members)},
+                context=render_context,
+            )
+        await hass.async_block_till_done()
+
         later = recalled + timedelta(seconds=3)
         with patch(
             "custom_components.home_lighting_manager.promotion_observer.dt_util.now",

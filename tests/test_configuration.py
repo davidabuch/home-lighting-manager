@@ -444,3 +444,60 @@ def test_migrated_main_area_detector_does_not_reassert_legacy_helper():
             in condition.get("value_template", "")
             for condition in choice["conditions"]
         )
+
+
+
+def test_hlm_main_area_release_bridge_clears_all_legacy_manual_helpers():
+    """Authoritative HLM group release must clear the transitional legacy split-brain."""
+
+    automation = next(
+        a
+        for a in PACKAGE["automation"]
+        if a["id"] == "home_lighting_hlm_main_area_release_bridge_v1"
+    )
+
+    trigger = automation["triggers"][0]
+    assert trigger == {
+        "trigger": "state",
+        "entity_id": "sensor.home_lighting_manager_shadow_health",
+        "attribute": "last_mutation_reason",
+        "to": "released_to_hlm",
+    }
+
+    condition_text = "\n".join(
+        c.get("value_template", "")
+        for c in automation["conditions"]
+        if c.get("condition") == "template"
+    )
+    assert "op.get('kind') == 'off'" in condition_text
+    assert "op.get('group_id') == 'light.holiday_main_area'" in condition_text
+    assert "op.get('reason') == 'released_to_hlm'" in condition_text
+    assert "command_authority" in condition_text
+
+    expected_helpers = {
+        "input_boolean.home_lighting_manual_kitchen_left_cabinet",
+        "input_boolean.home_lighting_manual_kitchen_right_cabinet",
+        "input_boolean.home_lighting_manual_living_left_cabinets",
+        "input_boolean.home_lighting_manual_living_right_cabinets",
+        "input_boolean.home_lighting_manual_living_left_ceiling",
+        "input_boolean.home_lighting_manual_living_right_ceiling",
+        "input_boolean.home_lighting_manual_liquor_cabinet",
+        "input_boolean.home_lighting_manual_main_area",
+    }
+
+    first = automation["actions"][0]
+    assert first["action"] == "input_boolean.turn_off"
+    assert set(first["target"]["entity_id"]) == expected_helpers
+
+    assert automation["actions"][1] == {
+        "action": "input_text.set_value",
+        "target": {
+            "entity_id": "input_text.home_lighting_manual_main_area_scene_id"
+        },
+        "data": {"value": ""},
+    }
+
+    assert automation["actions"][2] == {
+        "action": "script.home_lighting_evaluate_and_apply",
+        "data": {"trigger_source": "hlm_main_area_group_release"},
+    }

@@ -154,6 +154,17 @@ class HomeAssistantShadowObserver:
             unsub()
         self.hass.states.async_remove(DIAGNOSTIC_ENTITY_ID)
 
+    async def async_reset_homeowner_control(self) -> dict[str, int]:
+        """Start a fresh homeowner-observation epoch without commanding any lights."""
+        result = self.runtime.reset_homeowner_control()
+        self._external_correlator.reset()
+        self._external_burst = None
+        self._post_boundary_off_entities = set(self.manual_precedence)
+        self._last_decision = None
+        self._evidence_ledger.clear()
+        await self.async_save()
+        return result
+
     async def async_save(self) -> None:
         """Persist only contractually durable shadow evidence."""
         payload = self.runtime.export_persistence()

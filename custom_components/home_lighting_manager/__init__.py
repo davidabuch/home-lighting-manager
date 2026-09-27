@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
 
 from .ha_observer import CONF_MANUAL_PRECEDENCE, CONF_SHADOW_ENTITIES, DOMAIN
 from .ha_observer import CONFIG_SCHEMA as CONFIG_SCHEMA
@@ -30,4 +30,9 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     )
     await observer.async_start()
     hass.data[DOMAIN] = observer
+
+    async def async_reset_ownership(_call: ServiceCall) -> None:
+        await observer.async_reset_homeowner_control()
+
+    hass.services.async_register(DOMAIN, "reset_ownership", async_reset_ownership)
     return True

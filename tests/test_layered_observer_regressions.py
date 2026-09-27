@@ -1062,3 +1062,31 @@ async def test_authoritative_manual_scene_group_off_releases_despite_nested_aggr
     finally:
         await observer.async_shutdown()
         await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_observer_reset_clears_manual_off_and_starts_fresh_correlation_epoch(tmp_path):
+    leaves = ["light.reset_a", "light.reset_b"]
+    group = "light.reset_group"
+    hass, observer = await observer_for(tmp_path, [*leaves, group])
+    try:
+        for leaf in leaves:
+            observer.runtime.engine.push_manual_off(leaf)
+        observer.runtime.engine.apply_group_off(group, leaves)
+        observer._pending_external_leaves[leaves[0]] = object()
+        observer._external_group_burst_topology = {group: tuple(leaves)}
+
+        result = await observer.async_reset_homeowner_control()
+
+        assert result["removed_homeowner_layers"] == 2
+        assert observer.runtime.engine.group_off_sequences() == {}
+        assert observer._pending_external_leaves == {}
+        assert observer._external_group_burst_topology == {}
+        assert observer.runtime.reconciliation_protected_entities(set(leaves)) == ()
+        attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
+        assert attrs["last_mutation_reason"] == "ownership_reset"
+        assert attrs["command_authority"] is False
+        assert set(attrs["post_boundary_off_entities"]) == set(leaves)
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()

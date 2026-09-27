@@ -221,6 +221,12 @@ class ShadowRuntime:
         self._recovery_open = False
         return result
 
+    def update_managed_entities(
+        self, entity_ids: frozenset[str]
+    ) -> dict[str, tuple[str, ...]]:
+        """Adopt current configuration topology without inferring homeowner intent."""
+        return self.engine.update_managed_entities(entity_ids)
+
     def managed_entities(self) -> tuple[str, ...]:
         """Return entities with any current-generation shadow ownership state."""
         return self.engine.entity_ids()

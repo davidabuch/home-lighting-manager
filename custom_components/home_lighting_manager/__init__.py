@@ -10,7 +10,12 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant, ServiceCall
 
-from .ha_observer import CONF_MANUAL_PRECEDENCE, CONF_SHADOW_ENTITIES, DOMAIN
+from .ha_observer import (
+    CONF_MANUAL_PRECEDENCE,
+    CONF_SHADOW_ENTITIES,
+    CONF_SURFACE_EXCLUSIONS,
+    DOMAIN,
+)
 from .ha_observer import CONFIG_SCHEMA as CONFIG_SCHEMA
 from .promotion_observer import PromotingHomeAssistantShadowObserver
 
@@ -23,10 +28,12 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
 
     entity_ids = domain_config.get(CONF_SHADOW_ENTITIES, [])
     manual_precedence = domain_config.get(CONF_MANUAL_PRECEDENCE, {})
+    surface_exclusions = domain_config.get(CONF_SURFACE_EXCLUSIONS, {})
     observer = PromotingHomeAssistantShadowObserver(
         hass,
         list(entity_ids),
         dict(manual_precedence),
+        {surface: list(items) for surface, items in dict(surface_exclusions).items()},
     )
     await observer.async_start()
     hass.data[DOMAIN] = observer

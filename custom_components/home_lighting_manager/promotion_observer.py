@@ -99,8 +99,9 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         hass: HomeAssistant,
         entity_ids: list[str],
         manual_precedence: dict[str, int] | None = None,
+        surface_exclusions: dict[str, list[str]] | None = None,
     ) -> None:
-        super().__init__(hass, entity_ids, manual_precedence)
+        super().__init__(hass, entity_ids, manual_precedence, surface_exclusions)
         self._armed_off_attempts: deque[dict] = deque(maxlen=32)
         self._off_leaf_evidence: deque[dict] = deque(maxlen=64)
         self._pending_external_leaves: dict[str, _PendingExternalLeaf] = {}
@@ -290,6 +291,27 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             await self.async_save()
         else:
             self._publish_diagnostics()
+
+    @callback
+    def _managed_membership_changed(
+        self, added: tuple[str, ...], removed: tuple[str, ...]
+    ) -> None:
+        """Invalidate provisional correlation whenever canonical membership changes."""
+        affected = tuple(sorted(set(added) | set(removed)))
+        for entity_id in affected:
+            self._pending_external_leaves.pop(entity_id, None)
+        self._cancel_pending_single_for_entities(affected)
+        self._cancel_pending_group_promotions_for_entities(affected)
+        self._external_correlator.reset()
+        self._external_burst = None
+        self._external_group_burst_topology = {}
+        self._external_group_last_observed_at = None
+        for group_id in tuple(self._scene_displacement_until):
+            members = set(self._topology_members.get(group_id, ()))
+            if members & set(affected):
+                self._scene_displacement_until.pop(group_id, None)
+                self._scene_displacement_evidence.pop(group_id, None)
+                self._recent_surface_appearance_evidence.pop(group_id, None)
 
     async def async_reset_homeowner_control(self) -> dict[str, int]:
         """Cancel pre-reset promotion evidence, then clear homeowner ownership state."""

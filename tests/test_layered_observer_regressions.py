@@ -1536,10 +1536,17 @@ async def test_all_surfaces_use_managed_subset_for_first_and_second_group_off(
     from homeassistant.util import dt as dt_util
 
     unmanaged_extra = f"{group_id}_unmanaged_extra"
+    surface = {
+        "light.holiday_main_area": "main_area",
+        "light.front_eve_zone": "front_eve",
+        "light.holiday_path": "path",
+        "light.holiday_backyard": "backyard",
+    }[group_id]
     observer = PromotingHomeAssistantShadowObserver(
         HomeAssistant(str(tmp_path)),
         [*leaves, group_id],
         {},
+        {surface: [unmanaged_extra]},
     )
     hass = observer.hass
     hass.config.time_zone = "America/Los_Angeles"
@@ -1698,6 +1705,7 @@ async def test_backyard_first_group_off_survives_real_hue_fanout_beyond_two_seco
         hass,
         [*leaves, group_id],
         {},
+        {"backyard": [unmanaged_extra]},
     )
     await observer.async_start()
     try:

@@ -423,7 +423,6 @@ class HomeAssistantShadowObserver:
         if len(desired) > MAX_ENTITIES:
             raise ValueError("dynamic surface membership exceeds entity capacity")
 
-        previous = self.entity_ids
         self.entity_ids = desired
         membership = self.runtime.update_managed_entities(desired)
         added = tuple(membership["added"])

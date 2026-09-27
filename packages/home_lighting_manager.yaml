@@ -2156,6 +2156,84 @@ automation:
               - action: script.home_lighting_evaluate_backyard
 
 
+  # ==========================================================
+  # HLM -> LEGACY MAIN AREA RELEASE BRIDGE
+  #
+  # During shadow migration, raw Hue scene recalls still set the
+  # legacy Main Area Manual helpers so non-migrated members such as
+  # Liquor Cabinet remain protected. When the authoritative HLM
+  # ownership engine later accepts the exact Main Area group OFF as
+  # a first-OFF release, those compatibility helpers must be cleared
+  # in the same ownership epoch or the legacy resolver will keep one
+  # member Manual after HLM has released the group.
+  # ==========================================================
+
+  - id: home_lighting_hlm_main_area_release_bridge_v1
+    alias: "Home Lighting - HLM Main Area Release Bridge"
+    description: >
+      Clears transitional legacy Main Area Manual helpers when shadow HLM
+      authoritatively records an exact Main Area group OFF as released_to_hlm.
+      This is a migration bridge only; it does not infer ownership from physical
+      drift and it does not grant HLM command authority.
+    mode: restart
+
+    triggers:
+      - trigger: state
+        entity_id: sensor.home_lighting_manager_shadow_health
+        attribute: last_mutation_reason
+        to: "released_to_hlm"
+
+    conditions:
+      - condition: state
+        entity_id: sensor.home_lighting_manager_shadow_health
+        state: "observing"
+
+      - condition: template
+        value_template: >-
+          {{
+            state_attr(
+              'sensor.home_lighting_manager_shadow_health',
+              'command_authority'
+            ) == false
+          }}
+
+      - condition: template
+        value_template: >-
+          {% set op = state_attr(
+            'sensor.home_lighting_manager_shadow_health',
+            'latest_homeowner_operation'
+          ) %}
+          {{
+            op is mapping
+            and op.get('kind') == 'off'
+            and op.get('group_id') == 'light.holiday_main_area'
+            and op.get('reason') == 'released_to_hlm'
+          }}
+
+    actions:
+      - action: input_boolean.turn_off
+        target:
+          entity_id:
+            - input_boolean.home_lighting_manual_kitchen_left_cabinet
+            - input_boolean.home_lighting_manual_kitchen_right_cabinet
+            - input_boolean.home_lighting_manual_living_left_cabinets
+            - input_boolean.home_lighting_manual_living_right_cabinets
+            - input_boolean.home_lighting_manual_living_left_ceiling
+            - input_boolean.home_lighting_manual_living_right_ceiling
+            - input_boolean.home_lighting_manual_liquor_cabinet
+            - input_boolean.home_lighting_manual_main_area
+
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.home_lighting_manual_main_area_scene_id
+        data:
+          value: ""
+
+      - action: script.home_lighting_evaluate_and_apply
+        data:
+          trigger_source: "hlm_main_area_group_release"
+
+
   - id: home_lighting_daily_schedule_v1
     alias: "Home Lighting - Daily Schedule"
     description: >

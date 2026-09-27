@@ -97,6 +97,10 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         self._pending_single_promotions: dict[
             tuple[int | None, str], Callable[[], None]
         ] = {}
+        self._pending_overlapping_group_promotions: dict[
+            tuple[str, str, tuple[tuple[str, int], ...]],
+            tuple[frozenset[str], Callable[[], None]],
+        ] = {}
         self._last_external_promotion_key: tuple[int | None, str] | None = None
         self._last_external_promotion_outcome: dict[str, object] | None = None
         self._last_external_group_promotion_key: tuple[
@@ -160,6 +164,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         for member in members:
             self._pending_external_leaves.pop(member, None)
         self._cancel_pending_single_for_entities(members)
+        self._cancel_pending_group_promotions_for_entities(members)
         self._external_correlator.reset()
         self._external_burst = None
         self._external_group_burst_topology = {}
@@ -239,6 +244,9 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         for cancel in tuple(self._pending_single_promotions.values()):
             cancel()
         self._pending_single_promotions.clear()
+        for _members, cancel in tuple(self._pending_overlapping_group_promotions.values()):
+            cancel()
+        self._pending_overlapping_group_promotions.clear()
         await super().async_shutdown()
 
     @callback
@@ -247,6 +255,9 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         for cancel in tuple(self._pending_single_promotions.values()):
             cancel()
         self._pending_single_promotions.clear()
+        for _members, cancel in tuple(self._pending_overlapping_group_promotions.values()):
+            cancel()
+        self._pending_overlapping_group_promotions.clear()
         self._pending_external_leaves.clear()
         self._external_correlator.reset()
         self._external_burst = None
@@ -277,6 +288,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             })
             self._pending_external_leaves.pop(observation.entity_id, None)
             self._cancel_pending_single_for_entities((observation.entity_id,))
+            self._cancel_pending_group_promotions_for_entities((observation.entity_id,))
         if (
             observation.evidence.attribution_source
             is not IntentAttributionSource.UNATTRIBUTED_EXTERNAL
@@ -300,6 +312,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         if automatic_reason is not None:
             self._pending_external_leaves.pop(observation.entity_id, None)
             self._cancel_pending_single_for_entities((observation.entity_id,))
+            self._cancel_pending_group_promotions_for_entities((observation.entity_id,))
         elif (
             not members
             and observation.evidence.kind is IntentEvidenceKind.UNKNOWN
@@ -317,6 +330,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
                 # transition steps) update the retained leaf without restarting the
                 # exact-group correlation timer.
                 self._cancel_pending_single_for_entities((observation.entity_id,))
+                self._cancel_pending_group_promotions_for_entities((observation.entity_id,))
             self._pending_external_leaves[observation.entity_id] = _PendingExternalLeaf(
                 observed_at=observed_at,
                 observation=observation,
@@ -649,6 +663,21 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             cancel()
 
     @callback
+    def _cancel_pending_group_promotions_for_entities(
+        self, entity_ids: tuple[str, ...]
+    ) -> None:
+        """Cancel deferred exact subgroups consumed or superseded by newer intent."""
+        wanted = frozenset(entity_ids)
+        stale_keys = [
+            key
+            for key, (members, _cancel) in self._pending_overlapping_group_promotions.items()
+            if members & wanted
+        ]
+        for key in stale_keys:
+            _members, cancel = self._pending_overlapping_group_promotions.pop(key)
+            cancel()
+
+    @callback
     def _trace_armed_off(self, burst, candidate, observation, members, stage, result) -> None:
         """Capture gate inputs without refreshing topology, mutating evidence or taking authority."""
         armed = self.runtime.engine.group_off_sequences()
@@ -777,6 +806,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         self._trace_armed_off(burst, candidate, observation, members, "armed", "submitting_to_core")
         sequence = min(int(item.observation.sequence) for item in retained)
         self._cancel_pending_single_for_entities(armed_members)
+        self._cancel_pending_group_promotions_for_entities(armed_members)
         for entity_id in armed_members:
             self._pending_external_leaves.pop(entity_id, None)
 
@@ -1064,9 +1094,121 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             candidate.update(self._last_external_group_promotion_outcome)
             return
 
-        # Use the earliest member ingress sequence. If a newer direct homeowner
-        # intent arrived on any member while this group was still correlating, the
-        # core stale-intent guard rejects this inferred operation atomically.
+        candidate_members = frozenset(leaf_entities)
+        armed_superset = next(
+            (
+                armed_group
+                for armed_group, armed_members in self.runtime.engine.group_off_sequences().items()
+                if armed_group != group_id
+                and candidate_members < frozenset(armed_members)
+            ),
+            None,
+        )
+        if kind == "off" and armed_superset is not None:
+            self._schedule_overlapping_group_promotion(
+                candidate,
+                promotion_key,
+                group_id,
+                retained,
+                armed_superset,
+            )
+            return
+
+        self._apply_exact_group_promotion(candidate, promotion_key, group_id, retained)
+
+    @callback
+    def _schedule_overlapping_group_promotion(
+        self,
+        candidate: dict[str, object],
+        promotion_key: tuple[str, str, tuple[tuple[str, int], ...]],
+        group_id: str,
+        retained: tuple[_PendingExternalLeaf, ...],
+        armed_group_id: str,
+    ) -> None:
+        """Defer a nested OFF while an overlapping armed parent may still complete."""
+        if promotion_key in self._pending_overlapping_group_promotions:
+            candidate.update(
+                {
+                    "promoted_to_homeowner": False,
+                    "manual_ownership_recorded": False,
+                    "promotion_reason": (
+                        f"awaiting armed overlapping group {armed_group_id}"
+                    ),
+                }
+            )
+            return
+
+        member_ids = frozenset(item.observation.entity_id for item in retained)
+
+        @callback
+        def _finalize(_now: datetime) -> None:
+            pending = self._pending_overlapping_group_promotions.pop(
+                promotion_key, None
+            )
+            if pending is None:
+                return
+
+            armed_members = self.runtime.engine.group_off_sequences().get(
+                armed_group_id
+            )
+            if armed_members is None or not member_ids < frozenset(armed_members):
+                return
+
+            for entity_id in member_ids:
+                current = self.hass.states.get(entity_id)
+                if current is None or current.state != "off":
+                    return
+
+            self._apply_exact_group_promotion(
+                candidate,
+                promotion_key,
+                group_id,
+                retained,
+            )
+
+        cancel = async_call_later(
+            self.hass,
+            EXTERNAL_BURST_WINDOW_SECONDS,
+            _finalize,
+        )
+        self._pending_overlapping_group_promotions[promotion_key] = (
+            member_ids,
+            cancel,
+        )
+        candidate.update(
+            {
+                "promoted_to_homeowner": False,
+                "manual_ownership_recorded": False,
+                "promotion_reason": (
+                    f"awaiting armed overlapping group {armed_group_id}"
+                ),
+            }
+        )
+
+    @callback
+    def _apply_exact_group_promotion(
+        self,
+        candidate: dict[str, object],
+        promotion_key: tuple[str, str, tuple[tuple[str, int], ...]],
+        group_id: str,
+        retained: tuple[_PendingExternalLeaf, ...],
+    ) -> None:
+        """Apply a fully correlated exact-group operation through the core."""
+        if (
+            promotion_key == self._last_external_group_promotion_key
+            and self._last_external_group_promotion_outcome is not None
+        ):
+            candidate.update(self._last_external_group_promotion_outcome)
+            return
+
+        generations = {item.observation.generation for item in retained}
+        if len(generations) != 1:
+            return
+        generation = next(iter(generations))
+        if type(generation) is not int:
+            return
+
+        kind = promotion_key[1]
         sequence = min(int(item.observation.sequence) for item in retained)
         operation = HomeownerOperation(
             operation_id=f"external-group:{generation}:{sequence}",

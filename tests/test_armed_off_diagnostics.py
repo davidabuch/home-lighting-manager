@@ -246,3 +246,218 @@ async def test_each_armed_gate_reports_its_reason(tmp_path, case, expected):
     copied["armed_group_off_attempts"][-1]["result"] = "modified"
     assert observer._armed_off_attempts[-1]["result"] == "bounded"
     assert observer.runtime.engine.is_current_work(token)
+
+
+
+@pytest.mark.asyncio
+async def test_armed_parent_defers_exact_child_until_parent_second_off_completes(tmp_path):
+    """A nested aggregate from the same physical OFF burst cannot steal an armed parent."""
+
+    from dataclasses import replace
+
+    from homeassistant.core import State
+
+    from custom_components.home_lighting_manager.attribution_correlation import (
+        ExternalBurstTopology,
+    )
+    from custom_components.home_lighting_manager.intent_policy import (
+        IntentAttributionSource,
+        IntentEvidence,
+        IntentEvidenceKind,
+    )
+    from custom_components.home_lighting_manager.promotion_observer import _PendingExternalLeaf
+    from custom_components.home_lighting_manager.shadow import ShadowObservation
+
+    hass = HomeAssistant(str(tmp_path))
+    leaves = ("light.a", "light.b", "light.c")
+    child_members = leaves[:2]
+    parent, child = "light.parent", "light.child"
+    observer = PromotingHomeAssistantShadowObserver(hass, [parent, child, *leaves])
+    observer._topology_members = {parent: leaves, child: child_members}
+    observer._external_group_burst_topology = dict(observer._topology_members)
+    observer.runtime.engine.apply_group_off(parent, leaves)
+
+    evidence = IntentEvidence(
+        IntentEvidenceKind.UNKNOWN,
+        attribution_source=IntentAttributionSource.UNATTRIBUTED_EXTERNAL,
+    )
+    now = dt_util.now()
+    for sequence, entity_id in enumerate(child_members, 10):
+        observation = ShadowObservation(
+            entity_id,
+            evidence,
+            operation="off",
+            sequence=sequence,
+            generation=observer.runtime.engine.generation,
+        )
+        state = State(entity_id, "off")
+        observer._pending_external_leaves[entity_id] = _PendingExternalLeaf(
+            now, observation, state
+        )
+        hass.states.async_set(entity_id, "off")
+
+    child_burst = {
+        "topology": ExternalBurstTopology.MULTI_LEAF_WITH_AGGREGATE_PROPAGATION.value,
+        "leaf_entities": list(child_members),
+        "aggregate_entities": [child],
+    }
+    child_candidate = {}
+    callbacks = []
+
+    def fake_call_later(_hass, _delay, callback):
+        callbacks.append(callback)
+        return lambda: None
+
+    with patch(
+        "custom_components.home_lighting_manager.promotion_observer.async_call_later",
+        side_effect=fake_call_later,
+    ):
+        observer._promote_exact_group_candidate(
+            child_burst,
+            child_candidate,
+            current_entity_id=child,
+            burst_topology=observer._external_group_burst_topology,
+        )
+
+    assert child_candidate["promotion_reason"] == f"awaiting armed overlapping group {parent}"
+    assert parent in observer.runtime.engine.group_off_sequences()
+    assert child not in observer.runtime.engine.group_off_sequences()
+    assert len(observer._pending_overlapping_group_promotions) == 1
+    assert len(callbacks) == 1
+
+    entity_id = leaves[-1]
+    observation = ShadowObservation(
+        entity_id,
+        evidence,
+        operation="off",
+        sequence=12,
+        generation=observer.runtime.engine.generation,
+    )
+    observer._pending_external_leaves[entity_id] = _PendingExternalLeaf(
+        now, observation, State(entity_id, "off")
+    )
+    hass.states.async_set(entity_id, "off")
+
+    parent_observation = replace(
+        observation,
+        entity_id=parent,
+        sequence=13,
+    )
+    parent_burst = {
+        "leaf_entities": list(leaves),
+        "aggregate_entities": [parent, child],
+    }
+    parent_candidate = {}
+
+    with patch.object(observer.hass, "async_create_task"):
+        assert observer._promote_armed_group_off(
+            parent_burst,
+            parent_candidate,
+            observation=parent_observation,
+            members=leaves,
+            current_entity_id=parent,
+        )
+
+    assert parent_candidate["promotion_reason"] == "created_group_manual_off"
+    assert not observer._pending_overlapping_group_promotions
+    assert all(
+        observer.runtime.engine.resolve(entity_id).layer.kind is LayerKind.MANUAL_OFF
+        for entity_id in leaves
+    )
+    assert all(
+        observer.runtime.engine.resolve(entity_id).layer.group_id == parent
+        for entity_id in leaves
+    )
+    assert not observer.runtime.engine.group_off_changes()
+
+    # Even if a cancelled HA timer races and invokes its callback, the consumed
+    # deferred child no longer has permission to mutate ownership.
+    with patch.object(observer.hass, "async_create_task"):
+        callbacks[0](dt_util.now())
+    assert observer.runtime.operations.latest_homeowner["group_id"] == parent
+    assert observer.runtime.operations.latest_homeowner["reason"] == "created_group_manual_off"
+
+
+@pytest.mark.asyncio
+async def test_genuine_child_off_resolves_after_armed_parent_correlation_window(tmp_path):
+    """If the parent never completes, the deferred child remains valid later intent."""
+
+    from homeassistant.core import State
+
+    from custom_components.home_lighting_manager.attribution_correlation import (
+        ExternalBurstTopology,
+    )
+    from custom_components.home_lighting_manager.intent_policy import (
+        IntentAttributionSource,
+        IntentEvidence,
+        IntentEvidenceKind,
+    )
+    from custom_components.home_lighting_manager.promotion_observer import _PendingExternalLeaf
+    from custom_components.home_lighting_manager.shadow import ShadowObservation
+
+    hass = HomeAssistant(str(tmp_path))
+    leaves = ("light.a", "light.b", "light.c")
+    child_members = leaves[:2]
+    parent, child = "light.parent", "light.child"
+    observer = PromotingHomeAssistantShadowObserver(hass, [parent, child, *leaves])
+    observer._topology_members = {parent: leaves, child: child_members}
+    observer._external_group_burst_topology = dict(observer._topology_members)
+    observer.runtime.engine.apply_group_off(parent, leaves)
+
+    evidence = IntentEvidence(
+        IntentEvidenceKind.UNKNOWN,
+        attribution_source=IntentAttributionSource.UNATTRIBUTED_EXTERNAL,
+    )
+    now = dt_util.now()
+    for sequence, entity_id in enumerate(child_members, 20):
+        observation = ShadowObservation(
+            entity_id,
+            evidence,
+            operation="off",
+            sequence=sequence,
+            generation=observer.runtime.engine.generation,
+        )
+        observer._pending_external_leaves[entity_id] = _PendingExternalLeaf(
+            now, observation, State(entity_id, "off")
+        )
+        hass.states.async_set(entity_id, "off")
+
+    burst = {
+        "topology": ExternalBurstTopology.MULTI_LEAF_WITH_AGGREGATE_PROPAGATION.value,
+        "leaf_entities": list(child_members),
+        "aggregate_entities": [child],
+    }
+    candidate = {}
+    callbacks = []
+
+    def fake_call_later(_hass, _delay, callback):
+        callbacks.append(callback)
+        return lambda: None
+
+    with patch(
+        "custom_components.home_lighting_manager.promotion_observer.async_call_later",
+        side_effect=fake_call_later,
+    ):
+        observer._promote_exact_group_candidate(
+            burst,
+            candidate,
+            current_entity_id=child,
+            burst_topology=observer._external_group_burst_topology,
+        )
+
+    assert candidate["promotion_reason"] == f"awaiting armed overlapping group {parent}"
+    assert parent in observer.runtime.engine.group_off_sequences()
+    assert child not in observer.runtime.engine.group_off_sequences()
+
+    with patch.object(observer.hass, "async_create_task"):
+        callbacks[0](dt_util.now())
+
+    latest = observer.runtime.operations.latest_homeowner
+    assert latest["group_id"] == child
+    assert latest["reason"] == "released_to_hlm"
+    assert child in observer.runtime.engine.group_off_sequences()
+    assert parent not in observer.runtime.engine.group_off_sequences()
+    removals = observer.runtime.engine.group_off_changes()
+    assert removals[-1]["group_id"] == parent
+    assert removals[-1]["reason"] == "apply_group_off:overlap"
+    assert removals[-1]["trigger_group_id"] == child

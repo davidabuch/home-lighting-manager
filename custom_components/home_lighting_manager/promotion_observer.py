@@ -202,10 +202,8 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             return
 
         self._refresh_topology_cache()
-        members = tuple(
-            entity_id
-            for entity_id in self._topology_members.get(aggregate_id, ())
-            if entity_id in self.entity_ids
+        members = self._managed_group_members(
+            self._topology_members.get(aggregate_id, ())
         )
         if not members:
             return
@@ -551,8 +549,10 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         return {
             aggregate_id
             for aggregate_id, _guard_id in _SURFACE_GUARDS
-            if entity_id in self.manual_precedence
-            and entity_id in self._topology_members.get(aggregate_id, ())
+            if entity_id
+            in self._managed_group_members(
+                self._topology_members.get(aggregate_id, ())
+            )
         }
 
     @callback

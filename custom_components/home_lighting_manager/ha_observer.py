@@ -120,6 +120,11 @@ class HomeAssistantShadowObserver:
         generation = _next_generation(raw)
         self.runtime = ShadowRuntime(generation=generation, managed_entities=self.entity_ids)
 
+        # Canonical surface topology must be admitted before recovery so persisted
+        # Manual state for a dynamically discovered member is not rejected merely
+        # because it was never copied into the historical shadow_entities list.
+        self._refresh_topology_cache()
+
         if isinstance(raw, dict):
             self._post_boundary_off_entities = {
                 entity_id
@@ -138,8 +143,6 @@ class HomeAssistantShadowObserver:
                 family_evidence={},
             )
             self._storage_status = "loaded"
-
-        self._refresh_topology_cache()
 
         # Checkpoint the new authority generation immediately. If Home Assistant crashes before
         # another mutation or clean shutdown, the next process must still advance beyond this one.
@@ -171,6 +174,9 @@ class HomeAssistantShadowObserver:
     async def async_shutdown(self) -> None:
         """Persist evidence and unregister observers."""
         await self.async_save()
+        if self._membership_confirmation_cancel is not None:
+            self._membership_confirmation_cancel()
+            self._membership_confirmation_cancel = None
         while self._unsubscribers:
             unsub = self._unsubscribers.pop()
             unsub()

@@ -50,6 +50,12 @@ MANAGED_SURFACE_GROUPS = {
     "path": "light.holiday_path",
     "backyard": "light.holiday_backyard",
 }
+MANAGED_SURFACE_GUARDS = {
+    "main_area": "input_boolean.home_lighting_ha_guard_main_area",
+    "front_eve": "input_boolean.home_lighting_ha_guard_front_eve",
+    "path": "input_boolean.home_lighting_ha_guard_path",
+    "backyard": "input_boolean.home_lighting_ha_guard_backyard",
+}
 SURFACE_MEMBERSHIP_REMOVAL_CONFIRM_SECONDS = 5.0
 SURFACE_MANUAL_PRECEDENCE = 250
 STORAGE_KEY = f"{DOMAIN}.shadow"
@@ -241,6 +247,8 @@ class HomeAssistantShadowObserver:
         if observation is None:
             return
 
+        observation = self._apply_ha_guard_attribution(entity_id, observation)
+
         if self._member_entity_ids_for_event(entity_id, new_state):
             observation = replace(observation, evidence=replace(
                 observation.evidence, kind=IntentEvidenceKind.UNKNOWN, attribution_coherent=False
@@ -257,6 +265,41 @@ class HomeAssistantShadowObserver:
             await self.async_save()
         else:
             self._publish_diagnostics()
+
+    @callback
+    def _apply_ha_guard_attribution(
+        self, entity_id: str, observation: ShadowObservation
+    ) -> ShadowObservation:
+        """Mark HA-originated writes under the active surface guard as HLM-owned.
+
+        The legacy renderer raises a short per-surface guard around its own physical
+        writes. Only HA-attributed events are rewritten here; unattributed external
+        Hue/HomeKit events retain normal homeowner-correlation eligibility.
+        """
+        source = observation.evidence.attribution_source
+        if source not in (
+            IntentAttributionSource.HOME_ASSISTANT_USER,
+            IntentAttributionSource.HOME_ASSISTANT_CHAIN,
+        ):
+            return observation
+
+        for surface, group_id in MANAGED_SURFACE_GROUPS.items():
+            members = self._surface_members_by_group.get(group_id, ())
+            if entity_id not in members:
+                continue
+            guard = MANAGED_SURFACE_GUARDS[surface]
+            if not self.hass.states.is_state(guard, STATE_ON):
+                return observation
+            return replace(
+                observation,
+                evidence=replace(
+                    observation.evidence,
+                    kind=IntentEvidenceKind.HLM_COMMAND_CONSEQUENCE,
+                    attribution_coherent=True,
+                ),
+                operation_id=None,
+            )
+        return observation
 
     @callback
     def _record_external_topology(

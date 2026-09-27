@@ -904,18 +904,6 @@ async def test_authoritative_manual_scene_group_off_releases_despite_nested_aggr
                 },
             )
             await hass.async_block_till_done()
-            hass.states.async_set(
-                cabinets,
-                "off",
-                {
-                    "entity_id": [
-                        "light.kitchen_kitchen_left_cabinet_light",
-                        "light.kitchen_kitchen_right_cabinet_lights",
-                    ]
-                },
-            )
-            await hass.async_block_till_done()
-
         latest = observer.runtime.operations.latest_homeowner
         assert latest is not None
         assert latest["group_id"] == main
@@ -999,6 +987,19 @@ async def test_authoritative_manual_scene_group_off_releases_despite_nested_aggr
                 holiday_all,
                 "off",
                 {"entity_id": [*leaves, "light.extra_2"]},
+            )
+            await hass.async_block_till_done()
+            # Nested Kitchen Cabinet aggregate arrives before Main Area in the
+            # live Hue event order. It must be vetoed while Main Area is armed.
+            hass.states.async_set(
+                cabinets,
+                "off",
+                {
+                    "entity_id": [
+                        "light.kitchen_kitchen_left_cabinet_light",
+                        "light.kitchen_kitchen_right_cabinet_lights",
+                    ]
+                },
             )
             await hass.async_block_till_done()
             hass.states.async_set(main, "off", {"entity_id": list(leaves)})

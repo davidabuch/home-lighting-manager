@@ -429,7 +429,6 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             observation=observation,
             members=members,
             current_entity_id=observation.entity_id,
-            new_state=new_state,
         ):
             return
         if self._promote_owned_manual_group_off(
@@ -446,6 +445,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             observation=observation,
             members=members,
             current_entity_id=observation.entity_id,
+            new_state=new_state,
         ):
             return
         self._promote_exact_group_candidate(

@@ -436,15 +436,10 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         if not isinstance(candidate, dict):
             self._trace_armed_off(burst, {}, observation, members, "routing", "missing_candidate")
             return
-        if candidate.get("qualified") is True:
-            self._trace_armed_off(burst, candidate, observation, members,
-                                  "routing", "bypassed_qualified_single_candidate")
-            self._promote_single_candidate(
-                candidate,
-                members,
-                current_entity_id=observation.entity_id,
-            )
-            return
+        # Canonical surface OFF semantics outrank a provisional single-leaf
+        # candidate. This matters for one-managed-leaf surfaces such as Front Eve.
+        # Partial OFFs still fall through because the group gates require the full
+        # managed member set.
         if self._promote_armed_group_off(
             burst,
             candidate,
@@ -460,6 +455,15 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             members=members,
             current_entity_id=observation.entity_id,
         ):
+            return
+        if candidate.get("qualified") is True:
+            self._trace_armed_off(burst, candidate, observation, members,
+                                  "routing", "qualified_single_after_group_gates")
+            self._promote_single_candidate(
+                candidate,
+                members,
+                current_entity_id=observation.entity_id,
+            )
             return
         if self._promote_displaced_surface_appearance(
             burst,
@@ -1267,11 +1271,14 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         if len(leaf_entities) < 2:
             return
 
-        managed_topology = self._managed_group_topology(burst_topology)
+        # Generic exact-group discovery intentionally keeps raw Hue topology.
+        # Projecting before discovery can collapse a true exact group and a larger
+        # containing group that differs only by unmanaged members. Managed projection
+        # is applied later by the commissioned-surface ownership gates.
         group_id = resolve_unique_exact_group(
             leaf_entities=leaf_entities,
             observed_aggregate_entities=aggregate_entities,
-            topology_members=managed_topology,
+            topology_members=burst_topology,
         )
 
         # An already-armed group owns the next OFF interaction for its exact member
@@ -1279,7 +1286,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         # competing group operation that would invalidate that armed sequence before
         # the original aggregate receipt arrives.
         if group_id is not None:
-            candidate_members = frozenset(managed_topology.get(group_id, ()))
+            candidate_members = frozenset(burst_topology.get(group_id, ()))
             leaf_set = frozenset(leaf_entities)
             for armed_group, armed_members in self.runtime.engine.group_off_sequences().items():
                 armed_set = frozenset(armed_members)

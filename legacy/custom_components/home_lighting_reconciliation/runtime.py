@@ -2,8 +2,7 @@
 
 import asyncio
 
-
-SCENE_EVIDENCE_PENDING = "different or unknown latest recall; possible Manual intent"
+from .const import SCENE_EVIDENCE_PENDING
 
 
 def _retryable_evidence_gap(check):

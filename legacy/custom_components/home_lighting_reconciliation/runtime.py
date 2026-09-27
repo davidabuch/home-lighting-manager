@@ -58,7 +58,7 @@ class Reconciler:
                     unresolved=check.issues,
                     intentionally_unmanaged=check.skipped,
                 )
-                self.diag.update({"owner_" + s: v["owner"] for s, v in owners.items()})
+                self.diag.update({"owner_" + s: owners[s]["owner"] for s in ("main_area", "front_eve", "path", "backyard")})
                 if not check.issues:
                     self.diag.update(health="repaired" if repaired else "healthy", last_error=None)
                     break

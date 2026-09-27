@@ -1,0 +1,43 @@
+render:
+  name: Render lighting request
+  description: Render a legacy lighting request through the effective HLM ownership gate.
+  fields:
+    surface:
+      name: Surface
+      description: Managed lighting surface.
+      required: true
+      selector:
+        select:
+          options:
+            - main_area
+            - front_eve
+            - path
+            - backyard
+    command:
+      name: Command
+      description: Lighting service to execute after ownership filtering.
+      required: true
+      selector:
+        select:
+          options:
+            - light.turn_on
+            - light.turn_off
+            - scene.turn_on
+    entity_id:
+      name: Entity
+      description: Entity or entities requested by the legacy renderer.
+      required: true
+      selector:
+        object:
+    parameters:
+      name: Parameters
+      description: Optional service parameters passed after ownership filtering.
+      required: false
+      selector:
+        object:
+    expected_owner:
+      name: Expected owner
+      description: Optional automatic owner that must still be current at dispatch time.
+      required: false
+      selector:
+        text:

@@ -7,7 +7,9 @@ from homeassistant.util import dt as dt_util
 from custom_components.home_lighting_manager.engine import OwnershipEngine
 from custom_components.home_lighting_manager.ha_observer import (
     DIAGNOSTIC_ENTITY_ID,
+    SURFACE_MANUAL_PRECEDENCE,
     HomeAssistantShadowObserver,
+    _persisted_surface_seen_members,
 )
 from custom_components.home_lighting_manager.model import LayerKind
 
@@ -179,3 +181,86 @@ async def test_confirmed_surface_removal_retires_historical_static_member(tmp_pa
         assert not observer.runtime.engine.accepts_entity(removed)
     finally:
         await observer.async_shutdown()
+
+
+@pytest.mark.asyncio
+async def test_new_surface_member_inherits_manual_precedence_and_can_take_legacy_manual(tmp_path):
+    group = "light.holiday_backyard"
+    original = "light.backyard_original"
+    added = "light.backyard_added"
+    hass = HomeAssistant(str(tmp_path))
+    hass.states.async_set(original, "on")
+    hass.states.async_set(added, "on")
+    hass.states.async_set(group, "on", {"entity_id": [original]})
+
+    observer = HomeAssistantShadowObserver(
+        hass,
+        [group, original],
+        {original: SURFACE_MANUAL_PRECEDENCE},
+    )
+    await observer.async_start()
+    try:
+        hass.states.async_set(group, "on", {"entity_id": [original, added]})
+        observer._refresh_topology_cache()
+        assert observer.manual_precedence[added] == SURFACE_MANUAL_PRECEDENCE
+
+        from custom_components.home_lighting_manager.intent_policy import (
+            IntentAttributionSource,
+            IntentEvidence,
+            IntentEvidenceKind,
+        )
+        from custom_components.home_lighting_manager.model import Appearance
+        from custom_components.home_lighting_manager.shadow import ShadowObservation
+
+        decision = observer.runtime.observe(
+            ShadowObservation(
+                entity_id=added,
+                evidence=IntentEvidence(
+                    kind=IntentEvidenceKind.EXPLICIT_HOMEOWNER_COMMAND,
+                    attribution_coherent=True,
+                    attribution_source=IntentAttributionSource.HOME_ASSISTANT_USER,
+                    has_user_id=True,
+                    has_parent_id=False,
+                ),
+                appearance=Appearance(on=True, brightness=111),
+                manual_precedence=observer.manual_precedence[added],
+            )
+        )
+        assert decision.mutated
+        assert observer.runtime.engine.resolve(added).layer.kind is LayerKind.MANUAL
+    finally:
+        await observer.async_shutdown()
+
+
+def test_persisted_seen_members_keep_removed_static_leaf_under_topology_authority():
+    removed = "light.backyard_removed"
+    raw = {
+        "managed_surface_seen_members": [
+            removed,
+            "not-a-light",
+            123,
+        ]
+    }
+    assert _persisted_surface_seen_members(raw) == frozenset({removed})
+
+
+@pytest.mark.asyncio
+async def test_restart_seed_does_not_readd_removed_historical_static_member(tmp_path):
+    group = "light.holiday_backyard"
+    removed = "light.backyard_removed"
+    retained = "light.backyard_retained"
+    hass = HomeAssistant(str(tmp_path))
+    hass.states.async_set(retained, "on")
+    hass.states.async_set(group, "on", {"entity_id": [retained]})
+
+    observer = HomeAssistantShadowObserver(hass, [group, removed], {})
+    observer._topology_members = observer._snapshot_topology_cache()
+    observer._seed_surface_membership(
+        observer._topology_members,
+        {"backyard": (retained,)},
+        frozenset({removed, retained}),
+    )
+
+    assert retained in observer.entity_ids
+    assert removed not in observer.entity_ids
+    assert observer.manual_precedence[retained] == SURFACE_MANUAL_PRECEDENCE

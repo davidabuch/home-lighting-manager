@@ -75,6 +75,11 @@ _SCENE_RECALL_SOURCES: dict[str, tuple[str, str, str | None]] = {
 # Hue scene recall remain separate high-confidence homeowner evidence paths.
 _CONTEXTLESS_SINGLE_MEMBER_SURFACES = frozenset({"light.front_eve_zone"})
 
+# Hue can fan a large scene across the Backyard for several seconds while leaving
+# status.last_recall unchanged. Keep this separate from the ordinary 2-second
+# external-command burst so broad ambiguity does not become easier to promote.
+SCENE_DISPLACEMENT_CORROBORATION_SECONDS = 8.0
+
 
 @dataclass(frozen=True)
 class _PendingExternalLeaf:
@@ -115,6 +120,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         self._external_group_last_observed_at: datetime | None = None
         self._scene_recall_settle_until: dict[str, datetime] = {}
         self._scene_displacement_until: dict[str, datetime] = {}
+        self._scene_displacement_evidence: dict[str, dict[str, object]] = {}
 
     async def _async_state_changed(self, event: Event) -> None:
         """Consume authoritative Hue scene recalls before ordinary light telemetry."""
@@ -166,9 +172,16 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
                 # itself; it only opens a short corroboration window for a coherent
                 # external surface-wide appearance burst.
                 self._scene_displacement_until[aggregate_id] = dt_util.now() + timedelta(
-                    seconds=5
+                    seconds=SCENE_DISPLACEMENT_CORROBORATION_SECONDS
                 )
+                self._scene_displacement_evidence[aggregate_id] = {
+                    "leaf_entities": set(),
+                    "aggregate_seen": False,
+                }
             return
+
+        self._scene_displacement_until.pop(aggregate_id, None)
+        self._scene_displacement_evidence.pop(aggregate_id, None)
 
         scene_id = new_state.attributes.get("scene_id")
         if not isinstance(scene_id, str) or not scene_id or len(scene_id) > 256:
@@ -276,6 +289,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         self._external_group_last_observed_at = None
         self._scene_recall_settle_until.clear()
         self._scene_displacement_until.clear()
+        self._scene_displacement_evidence.clear()
         self._last_external_promotion_key = None
         self._last_external_promotion_outcome = None
         self._last_external_group_promotion_key = None
@@ -306,6 +320,8 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         self._external_burst = None
         self._external_group_burst_topology = {}
         self._external_group_last_observed_at = None
+        self._scene_displacement_until.clear()
+        self._scene_displacement_evidence.clear()
         super()._handle_nightly_boundary(now)
 
     @callback
@@ -434,6 +450,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             observation=observation,
             members=members,
             current_entity_id=observation.entity_id,
+            new_state=new_state,
         ):
             return
         self._promote_exact_group_candidate(
@@ -1013,119 +1030,138 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         observation: ShadowObservation,
         members: tuple[str, ...],
         current_entity_id: str,
+        new_state: State,
     ) -> bool:
-        """Promote a corroborated surface appearance when Hue omits a new recall timestamp."""
-        if observation.operation != "appearance" or not members:
+        """Promote one corroborated displaced Hue scene without widening normal bursts."""
+        if observation.operation != "appearance":
             return False
-        source = next(
-            (
-                value
-                for value in _SCENE_RECALL_SOURCES.values()
-                if value[0] == current_entity_id
-            ),
-            None,
-        )
-        if source is None:
-            return False
-        displacement_until = self._scene_displacement_until.get(current_entity_id)
+
         now = dt_util.now()
-        if displacement_until is None or displacement_until < now:
-            self._scene_displacement_until.pop(current_entity_id, None)
-            return False
-
-        _aggregate_id, guard_id, sync_entity_id = source
-        guard = self.hass.states.get(guard_id)
-        if guard is None or guard.state != "off":
-            return False
-        if sync_entity_id is not None:
-            sync = self.hass.states.get(sync_entity_id)
-            if sync is None or sync.state != "off":
-                return False
-
-        if (
-            burst.get("topology")
-            != ExternalBurstTopology.MULTI_LEAF_WITH_AGGREGATE_PROPAGATION.value
-        ):
-            return False
-        leaf_entities = frozenset(_string_tuple(burst.get("leaf_entities")))
-        exact_members = tuple(sorted(set(members)))
-        member_set = frozenset(exact_members)
-        if len(exact_members) < 2 or not leaf_entities or not leaf_entities <= member_set:
-            return False
-        # Require at least 75% of the known surface to have materially changed.
-        # A scene may leave a few bulbs unchanged, so exact leaf equality is too strict,
-        # while ordinary dynamic churn remains far below this surface-wide threshold.
-        if len(leaf_entities) * 4 < len(exact_members) * 3:
-            return False
-        aggregate_entities = frozenset(_string_tuple(burst.get("aggregate_entities")))
-        if current_entity_id not in aggregate_entities:
-            return False
-
-        outcomes: list[MemberOutcome] = []
-        for entity_id in exact_members:
-            state = self.hass.states.get(entity_id)
-            if state is None or state.state in ("unknown", "unavailable"):
-                outcomes.append(
-                    MemberOutcome(entity_id, available=False, succeeded=False)
-                )
+        for aggregate_id, displacement_until in tuple(self._scene_displacement_until.items()):
+            if displacement_until < now:
+                self._scene_displacement_until.pop(aggregate_id, None)
+                self._scene_displacement_evidence.pop(aggregate_id, None)
                 continue
-            if state.state != "on":
-                outcomes.append(
-                    MemberOutcome(entity_id, available=True, succeeded=False)
-                )
-                continue
-            outcomes.append(
-                MemberOutcome(
-                    entity_id,
-                    appearance=_appearance_from_state(state),
-                    manual_precedence=self.manual_precedence.get(entity_id),
-                )
-            )
 
-        sequence = self.runtime.reserve_sequence()
-        operation_id = (
-            f"external-displaced-scene:{self.runtime.engine.generation}:{sequence}"
-        )
-        result = self.runtime.observe_operation(
-            HomeownerOperation(
-                operation_id=operation_id,
-                sequence=sequence,
-                generation=self.runtime.engine.generation,
-                kind="appearance",
-                evidence=_correlated_homeowner_evidence(),
-                members=tuple(outcomes),
-                group_id=current_entity_id,
-                require_legacy_policy=False,
+            exact_members = tuple(sorted(set(self._topology_members.get(aggregate_id, ()))))
+            member_set = frozenset(exact_members)
+            if len(exact_members) < 2:
+                continue
+            if current_entity_id != aggregate_id and current_entity_id not in member_set:
+                continue
+
+            source = next(
+                (
+                    value
+                    for value in _SCENE_RECALL_SOURCES.values()
+                    if value[0] == aggregate_id
+                ),
+                None,
             )
-        )
-        candidate.update(
-            {
-                "qualified": True,
-                "entity_id": None,
-                "group_id": current_entity_id,
-                "basis": "scene_displacement_with_surface_appearance_corroboration",
-                **_promotion_outcome(result),
-            }
-        )
-        self._last_decision = ShadowDecision(
-            current_entity_id,
-            result.intent,
-            result.mutated,
-            result.reason,
-        )
-        if result.mutated:
+            if source is None:
+                continue
+            _surface_id, guard_id, sync_entity_id = source
+            guard = self.hass.states.get(guard_id)
+            if guard is None or guard.state != "off":
+                continue
+            if sync_entity_id is not None:
+                sync = self.hass.states.get(sync_entity_id)
+                if sync is None or sync.state != "off":
+                    continue
+
+            evidence = self._scene_displacement_evidence.setdefault(
+                aggregate_id,
+                {"leaf_entities": set(), "aggregate_seen": False},
+            )
+            leaf_entities = evidence.get("leaf_entities")
+            if not isinstance(leaf_entities, set):
+                leaf_entities = set()
+                evidence["leaf_entities"] = leaf_entities
+
+            if current_entity_id == aggregate_id and members:
+                evidence["aggregate_seen"] = True
+            elif (
+                current_entity_id in member_set
+                and observation.appearance is not None
+                and self._automatic_external_evidence_reason(current_entity_id, new_state) is None
+            ):
+                leaf_entities.add(current_entity_id)
+
+            if evidence.get("aggregate_seen") is not True:
+                continue
+            if len(leaf_entities) * 4 < len(exact_members) * 3:
+                continue
+
+            outcomes: list[MemberOutcome] = []
             for entity_id in exact_members:
-                self._post_boundary_off_entities.discard(entity_id)
-                self._pending_external_leaves.pop(entity_id, None)
-            self._cancel_pending_single_for_entities(exact_members)
-            self._cancel_pending_group_promotions_for_entities(exact_members)
-            self._scene_displacement_until.pop(current_entity_id, None)
-            self._external_correlator.reset()
-            self._external_burst = None
-            self._external_group_burst_topology = {}
-            self._external_group_last_observed_at = None
-            self.hass.async_create_task(self.async_save())
-        return result.mutated
+                state = self.hass.states.get(entity_id)
+                if state is None or state.state in ("unknown", "unavailable"):
+                    outcomes.append(
+                        MemberOutcome(entity_id, available=False, succeeded=False)
+                    )
+                    continue
+                if state.state != "on":
+                    outcomes.append(
+                        MemberOutcome(entity_id, available=True, succeeded=False)
+                    )
+                    continue
+                outcomes.append(
+                    MemberOutcome(
+                        entity_id,
+                        appearance=_appearance_from_state(state),
+                        manual_precedence=self.manual_precedence.get(entity_id),
+                    )
+                )
+
+            sequence = self.runtime.reserve_sequence()
+            operation_id = (
+                f"external-displaced-scene:{self.runtime.engine.generation}:{sequence}"
+            )
+            result = self.runtime.observe_operation(
+                HomeownerOperation(
+                    operation_id=operation_id,
+                    sequence=sequence,
+                    generation=self.runtime.engine.generation,
+                    kind="appearance",
+                    evidence=_correlated_homeowner_evidence(),
+                    members=tuple(outcomes),
+                    group_id=aggregate_id,
+                    require_legacy_policy=False,
+                )
+            )
+            candidate.update(
+                {
+                    "qualified": True,
+                    "entity_id": None,
+                    "group_id": aggregate_id,
+                    "basis": "scene_displacement_with_surface_appearance_corroboration",
+                    "corroborated_leaf_count": len(leaf_entities),
+                    "surface_member_count": len(exact_members),
+                    **_promotion_outcome(result),
+                }
+            )
+            self._last_decision = ShadowDecision(
+                aggregate_id,
+                result.intent,
+                result.mutated,
+                result.reason,
+            )
+            if result.mutated:
+                for entity_id in exact_members:
+                    self._post_boundary_off_entities.discard(entity_id)
+                    self._pending_external_leaves.pop(entity_id, None)
+                self._cancel_pending_single_for_entities(exact_members)
+                self._cancel_pending_group_promotions_for_entities(exact_members)
+                self._scene_displacement_until.pop(aggregate_id, None)
+                self._scene_displacement_evidence.pop(aggregate_id, None)
+                self._external_correlator.reset()
+                self._external_burst = None
+                self._external_group_burst_topology = {}
+                self._external_group_last_observed_at = None
+                self.hass.async_create_task(self.async_save())
+            return result.mutated
+
+        return False
 
     @callback
     def _promote_exact_group_candidate(

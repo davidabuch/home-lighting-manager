@@ -191,6 +191,47 @@ class OwnershipEngine:
         if remaining != current:
             self._changed("remove_homeowner_exceptions")
 
+    def reset_homeowner_control(self) -> dict[str, int]:
+        """Release resettable homeowner state while preserving system/session owners."""
+        removed_layers = 0
+        for entity_id in list(self._layers):
+            current = self._layers[entity_id]
+            remaining = [
+                layer
+                for layer in current
+                if layer.kind not in (LayerKind.MANUAL, LayerKind.MANUAL_OFF)
+            ]
+            removed_layers += len(current) - len(remaining)
+            if remaining:
+                self._layers[entity_id] = remaining
+            else:
+                self._layers.pop(entity_id, None)
+
+        cleared_suppressions = 0
+        homeowner_suppression_reasons = {
+            "homeowner_off",
+            "homeowner_group_off",
+            "homeowner_override",
+        }
+        for key, session in list(self._families.items()):
+            if (
+                session.suppressed
+                and session.suppression_reason in homeowner_suppression_reasons
+            ):
+                self._families[key] = replace(
+                    session, suppressed=False, suppression_reason=None
+                )
+                cleared_suppressions += 1
+
+        cleared_group_sequences = len(self._group_off_armed)
+        self._clear_group_off("reset_homeowner_control")
+        self._changed("ownership_reset")
+        return {
+            "removed_homeowner_layers": removed_layers,
+            "cleared_homeowner_suppressions": cleared_suppressions,
+            "cleared_group_off_sequences": cleared_group_sequences,
+        }
+
     def expire_boundary(self, boundary: str) -> None:
         """Expire layers whose lifecycle explicitly ends at a named boundary."""
         for entity_id in list(self._layers):

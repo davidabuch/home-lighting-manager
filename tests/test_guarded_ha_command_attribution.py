@@ -13,7 +13,6 @@ from custom_components.home_lighting_manager.intent_policy import (
 )
 from custom_components.home_lighting_manager.model import LayerKind
 
-
 ENTITY = "light.backyard_test_guarded_leaf"
 GROUP = MANAGED_SURFACE_GROUPS["backyard"]
 GUARD = "input_boolean.home_lighting_ha_guard_backyard"

@@ -21,6 +21,10 @@ def find_light_turn_on(sequence, entity_id):
         if not isinstance(step, dict):
             continue
 
+        if step.get("action") == "home_lighting_reconciliation.render":
+            request = step["data"]
+            if request["command"] == "light.turn_on" and request["entity_id"] == entity_id:
+                return {"data": request["parameters"]}
         if step.get("action") == "light.turn_on":
             target = step.get("target", {}).get("entity_id")
             targets = target if isinstance(target, list) else [target]
@@ -127,7 +131,7 @@ async def test_adapter_selective_scene_repair_uses_hue_executor(rig):
 
     calls = []
 
-    async def apply_actions(actual_scene_info, protected=()):
+    async def apply_actions(actual_scene_info, protected=(), valid=None):
         calls.append((actual_scene_info, tuple(protected)))
         return [
             entity
@@ -214,7 +218,7 @@ async def test_adapter_selective_scene_repair_fails_closed_without_scene_info(ri
 
     called = False
 
-    async def apply_actions(scene_info, protected=()):
+    async def apply_actions(scene_info, protected=(), valid=None):
         nonlocal called
         called = True
         return []
@@ -284,7 +288,7 @@ async def test_adapter_selective_scene_repair_fails_closed_on_hue_error(rig):
 
     assert len(selective) == 1
 
-    async def apply_actions(scene_info, protected=()):
+    async def apply_actions(scene_info, protected=(), valid=None):
         raise ValueError("Hue light action failed")
 
     a.hue.apply_actions = apply_actions
@@ -541,7 +545,7 @@ async def test_actual_score_sequence_suppressed_and_restores(rig):
         "to_state": SimpleNamespace(state="IN", attributes={"team_score": 10}),
     }
     await rig.run("49ers_live_game_lighting_and_score_celebration", {"trigger": trigger})
-    assert len(checks) == 7
+    assert len(checks) == 7 * (len(rig.members["main_area"]) + len(rig.members["front_eve"]))
     assert [d["entity_id"] for s, d in rig.lights() if s == "scene.turn_on"] == [
         "scene.front_eve_zone_49ers",
         "scene.holiday_main_area_49ers",
@@ -832,3 +836,27 @@ def test_scene_monitor_corroboration_fails_closed(
 
     assert result[scene]["latest"] is False
     assert "latest_corroborated_by" not in result[scene]
+
+
+@pytest.mark.asyncio
+async def test_first_group_off_without_previous_exceptions_reconciles_immediately(rig):
+    """A first OFF can release an all-automatic group with an empty protected set."""
+    adapter, _ = adapter_for(rig)
+    adapter.started = True
+    calls = []
+    adapter.runner.schedule = lambda reason, delay=None: calls.append((reason, delay))
+    entity = "sensor.home_lighting_manager_shadow_health"
+    attrs = {"command_authority": False, "reconciliation_protected_entities": [],
+             "effective_ownership": {"revision": 1}}
+    rig.set(entity, "observing", attrs)
+    await rig.hass.async_block_till_done()
+    unsub = rig.hass.bus.async_listen(EVENT_STATE_CHANGED, adapter.changed)
+    attrs = {**attrs, "effective_ownership": {"revision": 2},
+             "latest_homeowner_operation": {"operation_id": "group-first-off", "reason": "released_to_hlm"}}
+    rig.set(entity, "observing", attrs)
+    await rig.hass.async_block_till_done()
+    # Additional diagnostics for the same receipt must not restart immediate work.
+    rig.set(entity, "observing", {**attrs, "recent_evidence": ["telemetry"]})
+    await rig.hass.async_block_till_done()
+    unsub()
+    assert calls == [(entity, 0)]

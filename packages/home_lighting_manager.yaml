@@ -269,6 +269,8 @@ script:
           {% endif %}
         {% endfor %}
         {{ ns.entities }}
+      hlm_effective_ownership: "{{ state_attr('sensor.home_lighting_manager_shadow_health', 'effective_ownership') or {} }}"
+      hlm_managed_groups: "{{ hlm_effective_ownership.get('groups', {}) }}"
       manual_front_eve_active: '{{ is_state(''input_boolean.home_lighting_manual_front_eve'', ''on'')
         }}'
       liquor_cabinet_open: |-
@@ -329,18 +331,19 @@ script:
         if game_live else 'holiday' if holiday_active and holiday_main_scene else 'daily' if main_area_baseline_eligible
         else 'off' }}
       owner_front_eve: >-
-        {{ 'manual' if manual_front_eve_active else '49ers' if game_live else 'holiday' if holiday_active
+        {{ 'manual' if manual_front_eve_active and 'light.front_eve_zone' not in hlm_managed_groups else '49ers' if game_live else 'holiday' if holiday_active
         and holiday_eve_scene else 'daily' if front_eve_baseline_eligible else 'off' }}
       owner_path: >-
-        {{ 'manual' if is_state('input_boolean.home_lighting_manual_path', 'on') else 'holiday' if
+        {{ 'manual' if is_state('input_boolean.home_lighting_manual_path', 'on') and 'light.holiday_path' not in hlm_managed_groups else 'holiday' if
         holiday_active and holiday_path_scene else 'daily' if is_state('input_boolean.home_lighting_path_window',
         'on') else 'off' }}
       owner_backyard: >-
         {{ 'sync' if is_state('binary_sensor.hue_bridge_backyard', 'on') else 'manual' if is_state('input_boolean.home_lighting_manual_backyard',
-        'on') else 'spa' if is_state('input_boolean.spa_gauge_active', 'on') else 'holiday' if holiday_active
+        'on') and 'light.holiday_backyard' not in hlm_managed_groups else 'spa' if is_state('input_boolean.spa_gauge_active', 'on') else 'holiday' if holiday_active
         and holiday_backyard_scene else 'daily' if is_state('input_boolean.home_lighting_backyard_window',
         'on') else 'off' }}
       owners:
+        hlm_effective_ownership: "{{ hlm_effective_ownership }}"
         main_area:
           owner: '{{ owner_main_area }}'
           scene: '{{ ''scene.holiday_main_area_49ers'' if owner_main_area == ''49ers'' else holiday_main_scene
@@ -403,15 +406,17 @@ script:
     mode: restart
 
     sequence:
-      - action: light.turn_on
-        target:
-          entity_id: light.front_yard_front_eve_lights
+      - action: home_lighting_reconciliation.render
         data:
-          brightness: 165
-          color_temp_kelvin: 2724
-          effect: "off"
-          transition: 0
-
+          surface: front_eve
+          expected_owner: daily
+          command: light.turn_on
+          entity_id: light.front_yard_front_eve_lights
+          parameters:
+            brightness: 165
+            color_temp_kelvin: 2724
+            effect: "off"
+            transition: 0
 
   # ============================================================
   # FRONT EVE OFF
@@ -424,484 +429,113 @@ script:
     mode: restart
 
     sequence:
-      - action: light.turn_off
-        target:
-          entity_id: light.front_yard_front_eve_lights
+      - action: home_lighting_reconciliation.render
         data:
-          transition: 0
-
+          surface: front_eve
+          expected_owner: "off"
+          command: light.turn_off
+          entity_id: light.front_yard_front_eve_lights
+          parameters:
+            transition: 0
 
   # ============================================================
   # MAIN AREA BASELINE
   # ============================================================
 
   home_lighting_apply_main_area_baseline:
-    alias: "Home Lighting - Apply Main Area Baseline"
-    description: >
-      Applies the validated everyday Main Area lighting configuration.
+    alias: Home Lighting - Apply Main Area Baseline
+    description: Declares the validated per-light Daily appearance. The shared renderer
+      enforces current ownership and the liquor-door exclusion before dispatch.
     mode: restart
-
     sequence:
-      - parallel:
-
-          # Kitchen Left Cabinet
-          - if:
-              - condition: template
-                value_template: >-
-                  {% set migrated =
-                    state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'manual_precedence_entities'
-                    )
-                    if is_state(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'observing'
-                    )
-                    and state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'command_authority'
-                    ) == false
-                    and state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'manual_precedence_entities'
-                    ) is iterable
-                    else []
-                  %}
-                  {% set protected =
-                    state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'reconciliation_protected_entities'
-                    )
-                    if is_state(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'observing'
-                    )
-                    and state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'command_authority'
-                    ) == false
-                    and state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'reconciliation_protected_entities'
-                    ) is iterable
-                    else []
-                  %}
-                  {{
-                    (
-                      'light.kitchen_kitchen_left_cabinet_light' in migrated
-                      and 'light.kitchen_kitchen_left_cabinet_light' not in protected
-                    )
-                    or
-                    (
-                      'light.kitchen_kitchen_left_cabinet_light' not in migrated
-                      and is_state('input_boolean.home_lighting_manual_kitchen_left_cabinet', 'off')
-                    )
-                  }}
-            then:
-              - action: light.turn_on
-                target:
-                  entity_id: light.kitchen_kitchen_left_cabinet_light
-                data:
-                  brightness: 255
-                  color_temp_kelvin: 2724
-                  effect: "off"
-                  transition: 0
-
-          # Kitchen Right Cabinets
-          - if:
-              - condition: template
-                value_template: >-
-                  {% set migrated =
-                    state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'manual_precedence_entities'
-                    )
-                    if is_state(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'observing'
-                    )
-                    and state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'command_authority'
-                    ) == false
-                    and state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'manual_precedence_entities'
-                    ) is iterable
-                    else []
-                  %}
-                  {% set protected =
-                    state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'reconciliation_protected_entities'
-                    )
-                    if is_state(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'observing'
-                    )
-                    and state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'command_authority'
-                    ) == false
-                    and state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'reconciliation_protected_entities'
-                    ) is iterable
-                    else []
-                  %}
-                  {{
-                    (
-                      'light.kitchen_kitchen_right_cabinet_lights' in migrated
-                      and 'light.kitchen_kitchen_right_cabinet_lights' not in protected
-                    )
-                    or
-                    (
-                      'light.kitchen_kitchen_right_cabinet_lights' not in migrated
-                      and is_state('input_boolean.home_lighting_manual_kitchen_right_cabinet', 'off')
-                    )
-                  }}
-            then:
-              - action: light.turn_on
-                target:
-                  entity_id: light.kitchen_kitchen_right_cabinet_lights
-                data:
-                  brightness: 255
-                  color_temp_kelvin: 2724
-                  effect: "off"
-                  transition: 0
-
-          # Living Room Left Cabinets
-          - if:
-              - condition: template
-                value_template: >-
-                  {% set migrated =
-                    state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'manual_precedence_entities'
-                    )
-                    if is_state(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'observing'
-                    )
-                    and state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'command_authority'
-                    ) == false
-                    and state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'manual_precedence_entities'
-                    ) is iterable
-                    else []
-                  %}
-                  {% set protected =
-                    state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'reconciliation_protected_entities'
-                    )
-                    if is_state(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'observing'
-                    )
-                    and state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'command_authority'
-                    ) == false
-                    and state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'reconciliation_protected_entities'
-                    ) is iterable
-                    else []
-                  %}
-                  {{
-                    (
-                      'light.living_room_living_room_left_cabinets' in migrated
-                      and 'light.living_room_living_room_left_cabinets' not in protected
-                    )
-                    or
-                    (
-                      'light.living_room_living_room_left_cabinets' not in migrated
-                      and is_state('input_boolean.home_lighting_manual_living_left_cabinets', 'off')
-                    )
-                  }}
-            then:
-              - action: light.turn_on
-                target:
-                  entity_id: light.living_room_living_room_left_cabinets
-                data:
-                  brightness: 183
-                  xy_color:
-                    - 0.4711
-                    - 0.3867
-                  effect: "off"
-                  transition: 0
-
-          # Living Room Right Cabinets
-          - if:
-              - condition: template
-                value_template: >-
-                  {% set migrated =
-                    state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'manual_precedence_entities'
-                    )
-                    if is_state(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'observing'
-                    )
-                    and state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'command_authority'
-                    ) == false
-                    and state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'manual_precedence_entities'
-                    ) is iterable
-                    else []
-                  %}
-                  {% set protected =
-                    state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'reconciliation_protected_entities'
-                    )
-                    if is_state(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'observing'
-                    )
-                    and state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'command_authority'
-                    ) == false
-                    and state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'reconciliation_protected_entities'
-                    ) is iterable
-                    else []
-                  %}
-                  {{
-                    (
-                      'light.living_room_living_room_right_cabinet_lights' in migrated
-                      and 'light.living_room_living_room_right_cabinet_lights' not in protected
-                    )
-                    or
-                    (
-                      'light.living_room_living_room_right_cabinet_lights' not in migrated
-                      and is_state('input_boolean.home_lighting_manual_living_right_cabinets', 'off')
-                    )
-                  }}
-            then:
-              - action: light.turn_on
-                target:
-                  entity_id: light.living_room_living_room_right_cabinet_lights
-                data:
-                  brightness: 183
-                  xy_color:
-                    - 0.4711
-                    - 0.3867
-                  effect: "off"
-                  transition: 0
-
-          # Liquor Cabinet
-          # Existing door-open automation remains authoritative.
-          - if:
-              - condition: template
-                value_template: >-
-                  {% set migrated =
-                    state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'manual_precedence_entities'
-                    )
-                    if is_state(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'observing'
-                    )
-                    and state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'command_authority'
-                    ) == false
-                    and state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'manual_precedence_entities'
-                    ) is iterable
-                    else []
-                  %}
-                  {% set protected =
-                    state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'reconciliation_protected_entities'
-                    )
-                    if is_state(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'observing'
-                    )
-                    and state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'command_authority'
-                    ) == false
-                    and state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'reconciliation_protected_entities'
-                    ) is iterable
-                    else []
-                  %}
-                  {{
-                    (
-                      'light.living_room_liquor_cabinet_light' in migrated
-                      and 'light.living_room_liquor_cabinet_light' not in protected
-                    )
-                    or
-                    (
-                      'light.living_room_liquor_cabinet_light' not in migrated
-                      and is_state('input_boolean.home_lighting_manual_liquor_cabinet', 'off')
-                    )
-                  }}
-              - condition: state
-                entity_id: binary_sensor.liquor_cabinet_door_r
-                state: "off"
-              - condition: state
-                entity_id: binary_sensor.liquor_cabinet_l_door
-                state: "off"
-            then:
-              - action: light.turn_on
-                target:
-                  entity_id: light.living_room_liquor_cabinet_light
-                data:
-                  brightness: 183
-                  xy_color:
-                    - 0.4710
-                    - 0.3866
-                  effect: "off"
-                  transition: 0
-
-          # Living Room Left Ceiling
-          - if:
-              - condition: template
-                value_template: >-
-                  {% set migrated =
-                    state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'manual_precedence_entities'
-                    )
-                    if is_state(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'observing'
-                    )
-                    and state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'command_authority'
-                    ) == false
-                    and state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'manual_precedence_entities'
-                    ) is iterable
-                    else []
-                  %}
-                  {% set protected =
-                    state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'reconciliation_protected_entities'
-                    )
-                    if is_state(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'observing'
-                    )
-                    and state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'command_authority'
-                    ) == false
-                    and state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'reconciliation_protected_entities'
-                    ) is iterable
-                    else []
-                  %}
-                  {{
-                    (
-                      'light.living_room_left_ceiling_light' in migrated
-                      and 'light.living_room_left_ceiling_light' not in protected
-                    )
-                    or
-                    (
-                      'light.living_room_left_ceiling_light' not in migrated
-                      and is_state('input_boolean.home_lighting_manual_living_left_ceiling', 'off')
-                    )
-                  }}
-            then:
-              - action: light.turn_on
-                target:
-                  entity_id: light.living_room_left_ceiling_light
-                data:
-                  brightness: 43
-                  xy_color:
-                    - 0.4711
-                    - 0.3867
-                  effect: "off"
-                  transition: 0
-
-          # Living Room Right Ceiling
-          - if:
-              - condition: template
-                value_template: >-
-                  {% set migrated =
-                    state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'manual_precedence_entities'
-                    )
-                    if is_state(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'observing'
-                    )
-                    and state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'command_authority'
-                    ) == false
-                    and state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'manual_precedence_entities'
-                    ) is iterable
-                    else []
-                  %}
-                  {% set protected =
-                    state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'reconciliation_protected_entities'
-                    )
-                    if is_state(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'observing'
-                    )
-                    and state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'command_authority'
-                    ) == false
-                    and state_attr(
-                      'sensor.home_lighting_manager_shadow_health',
-                      'reconciliation_protected_entities'
-                    ) is iterable
-                    else []
-                  %}
-                  {{
-                    (
-                      'light.living_room_living_room_right_ceiling' in migrated
-                      and 'light.living_room_living_room_right_ceiling' not in protected
-                    )
-                    or
-                    (
-                      'light.living_room_living_room_right_ceiling' not in migrated
-                      and is_state('input_boolean.home_lighting_manual_living_right_ceiling', 'off')
-                    )
-                  }}
-            then:
-              - action: light.turn_on
-                target:
-                  entity_id: light.living_room_living_room_right_ceiling
-                data:
-                  brightness: 43
-                  xy_color:
-                    - 0.4711
-                    - 0.3867
-                  effect: "off"
-                  transition: 0
-
+    - parallel:
+      - action: home_lighting_reconciliation.render
+        data:
+          surface: main_area
+          expected_owner: daily
+          command: light.turn_on
+          entity_id: light.kitchen_kitchen_left_cabinet_light
+          parameters:
+            brightness: 255
+            color_temp_kelvin: 2724
+            effect: 'off'
+            transition: 0
+      - action: home_lighting_reconciliation.render
+        data:
+          surface: main_area
+          expected_owner: daily
+          command: light.turn_on
+          entity_id: light.kitchen_kitchen_right_cabinet_lights
+          parameters:
+            brightness: 255
+            color_temp_kelvin: 2724
+            effect: 'off'
+            transition: 0
+      - action: home_lighting_reconciliation.render
+        data:
+          surface: main_area
+          expected_owner: daily
+          command: light.turn_on
+          entity_id: light.living_room_living_room_left_cabinets
+          parameters:
+            brightness: 183
+            xy_color:
+            - 0.4711
+            - 0.3867
+            effect: 'off'
+            transition: 0
+      - action: home_lighting_reconciliation.render
+        data:
+          surface: main_area
+          expected_owner: daily
+          command: light.turn_on
+          entity_id: light.living_room_living_room_right_cabinet_lights
+          parameters:
+            brightness: 183
+            xy_color:
+            - 0.4711
+            - 0.3867
+            effect: 'off'
+            transition: 0
+      - action: home_lighting_reconciliation.render
+        data:
+          surface: main_area
+          expected_owner: daily
+          command: light.turn_on
+          entity_id: light.living_room_liquor_cabinet_light
+          parameters:
+            brightness: 183
+            xy_color:
+            - 0.471
+            - 0.3866
+            effect: 'off'
+            transition: 0
+      - action: home_lighting_reconciliation.render
+        data:
+          surface: main_area
+          expected_owner: daily
+          command: light.turn_on
+          entity_id: light.living_room_left_ceiling_light
+          parameters:
+            brightness: 43
+            xy_color:
+            - 0.4711
+            - 0.3867
+            effect: 'off'
+            transition: 0
+      - action: home_lighting_reconciliation.render
+        data:
+          surface: main_area
+          expected_owner: daily
+          command: light.turn_on
+          entity_id: light.living_room_living_room_right_ceiling
+          parameters:
+            brightness: 43
+            xy_color:
+            - 0.4711
+            - 0.3867
+            effect: 'off'
+            transition: 0
 
   # ============================================================
   # MAIN AREA OFF
@@ -910,39 +544,17 @@ script:
   home_lighting_main_area_off:
     alias: Home Lighting - Main Area Off
     description: |
-      Turns off the Hue Main Area as one grouped-light command for synchronized and reliable shutdown. If a liquor-cabinet door is open, the functional bright-white cabinet override is immediately reasserted after the group turns off.
+      Requests OFF only for eligible automatic Main Area leaves through the shared renderer. An open liquor cabinet remains a functional overlay.
     mode: restart
     sequence:
-    - action: script.home_lighting_resolve_owners
-      response_variable: current
-
-    - variables:
-        automatic_entities: >-
-          {% set all_entities = [
-            'light.kitchen_kitchen_left_cabinet_light',
-            'light.kitchen_kitchen_right_cabinet_lights',
-            'light.living_room_living_room_left_cabinets',
-            'light.living_room_living_room_right_cabinet_lights',
-            'light.living_room_liquor_cabinet_light',
-            'light.living_room_left_ceiling_light',
-            'light.living_room_living_room_right_ceiling'
-          ] %}
-          {{
-            all_entities
-            | reject('in', current.main_area.manual_entities)
-            | list
-          }}
-
-    - if:
-      - condition: template
-        value_template: "{{ automatic_entities | count > 0 }}"
-      then:
-      - action: light.turn_off
-        target:
-          entity_id: "{{ automatic_entities }}"
-        data:
+    - action: home_lighting_reconciliation.render
+      data:
+        surface: main_area
+        expected_owner: "off"
+        command: light.turn_off
+        entity_id: light.holiday_main_area
+        parameters:
           transition: 0
-
     - if:
       - condition: or
         conditions:
@@ -1036,10 +648,12 @@ script:
     mode: restart
 
     sequence:
-      - action: scene.turn_on
-        target:
+      - action: home_lighting_reconciliation.render
+        data:
+          surface: path
+          expected_owner: daily
+          command: scene.turn_on
           entity_id: scene.driveway_path_lights_meriete
-
 
   # ============================================================
   # DRIVEWAY PATH OFF
@@ -1052,12 +666,14 @@ script:
     mode: restart
 
     sequence:
-      - action: light.turn_off
-        target:
-          entity_id: light.driveway_path_lights
+      - action: home_lighting_reconciliation.render
         data:
-          transition: 0
-
+          surface: path
+          expected_owner: "off"
+          command: light.turn_off
+          entity_id: light.driveway_path_lights
+          parameters:
+            transition: 0
 
   # ============================================================
   # DRIVEWAY PATH STATE APPLIER
@@ -1066,30 +682,9 @@ script:
   home_lighting_apply_path_state:
     alias: Home Lighting - Apply Driveway Path State
     description: |
-      Applies the authoritative Driveway Path owner while respecting HLM per-light and group Manual-OFF ownership. A full protected Path suppresses automatic rendering entirely; partial protection is re-applied after automatic rendering so only unprotected leaves follow the current automatic owner.
+      Applies the authoritative Driveway Path owner while respecting HLM per-light and group Manual-OFF ownership. The shared rendering gate preserves Manual appearance and Manual-OFF before any physical command.
     mode: restart
     sequence:
-    - variables:
-        path_entities:
-          - light.front_yard_front_path_light_1
-          - light.front_yard_front_yard_path_light_2
-          - light.front_yard_front_yard_path_light_3
-          - light.front_yard_front_yard_path_light_4
-          - light.front_yard_front_yard_path_light_5
-          - light.front_yard_front_yard_path_light_6
-        hlm_protected_entities: >-
-          {{
-            state_attr(
-              'sensor.home_lighting_manager_shadow_health',
-              'reconciliation_protected_entities'
-            ) or []
-          }}
-        protected_path_entities: >-
-          {{
-            path_entities
-            | select('in', hlm_protected_entities)
-            | list
-          }}
     - action: script.home_lighting_resolve_owners
       response_variable: current
     - if:
@@ -1097,11 +692,6 @@ script:
         value_template: '{{ current.path.owner == ''manual'' }}'
       then:
       - stop: Homeowner Manual owns Holiday Path.
-    - if:
-      - condition: template
-        value_template: '{{ protected_path_entities | count == path_entities | count }}'
-      then:
-      - stop: HLM Manual-OFF owns the full Driveway Path.
     - action: script.home_lighting_rearm_ha_guard
       data:
         guard_entity: input_boolean.home_lighting_ha_guard_path
@@ -1110,9 +700,13 @@ script:
         - condition: template
           value_template: '{{ current.path.owner == ''holiday'' }}'
         sequence:
-        - action: scene.turn_on
-          target:
+        - action: home_lighting_reconciliation.render
+          data:
+            surface: path
+            expected_owner: "{{ current.path.owner }}"
+            command: scene.turn_on
             entity_id: '{{ current.path.scene }}'
+
       - conditions:
         - condition: template
           value_template: '{{ current.path.owner == ''daily'' }}'
@@ -1120,16 +714,6 @@ script:
         - action: script.home_lighting_apply_path_baseline
       default:
       - action: script.home_lighting_path_off
-    - if:
-      - condition: template
-        value_template: '{{ protected_path_entities | count > 0 }}'
-      then:
-      - action: light.turn_off
-        target:
-          entity_id: '{{ protected_path_entities }}'
-        data:
-          transition: 0
-
   # ============================================================
   # BACKYARD DAILY BASELINE
   #
@@ -1149,10 +733,12 @@ script:
     mode: restart
 
     sequence:
-      - action: scene.turn_on
-        target:
+      - action: home_lighting_reconciliation.render
+        data:
+          surface: backyard
+          expected_owner: daily
+          command: scene.turn_on
           entity_id: scene.backyard_backyard_forest_adventure
-
 
   # ============================================================
   # BACKYARD OFF
@@ -1165,12 +751,14 @@ script:
     mode: restart
 
     sequence:
-      - action: light.turn_off
-        target:
-          entity_id: light.backyard
+      - action: home_lighting_reconciliation.render
         data:
-          transition: 0
-
+          surface: backyard
+          expected_owner: "off"
+          command: light.turn_off
+          entity_id: light.backyard
+          parameters:
+            transition: 0
 
   # ============================================================
   # BACKYARD EVALUATOR
@@ -1209,9 +797,13 @@ script:
         - condition: template
           value_template: '{{ current.backyard.owner == ''holiday'' }}'
         sequence:
-        - action: scene.turn_on
-          target:
+        - action: home_lighting_reconciliation.render
+          data:
+            surface: backyard
+            expected_owner: "{{ current.backyard.owner }}"
+            command: scene.turn_on
             entity_id: '{{ current.backyard.scene }}'
+
       - conditions:
         - condition: template
           value_template: '{{ current.backyard.owner == ''daily'' }}'
@@ -1290,16 +882,24 @@ script:
           - condition: template
             value_template: '{{ current.front_eve.owner == ''49ers'' }}'
           sequence:
-          - action: scene.turn_on
-            target:
+          - action: home_lighting_reconciliation.render
+            data:
+              surface: front_eve
+              expected_owner: "{{ current.front_eve.owner }}"
+              command: scene.turn_on
               entity_id: '{{ current.front_eve.scene }}'
+
         - conditions:
           - condition: template
             value_template: '{{ current.front_eve.owner == ''holiday'' }}'
           sequence:
-          - action: scene.turn_on
-            target:
+          - action: home_lighting_reconciliation.render
+            data:
+              surface: front_eve
+              expected_owner: "{{ current.front_eve.owner }}"
+              command: scene.turn_on
               entity_id: '{{ current.front_eve.scene }}'
+
         - conditions:
           - condition: template
             value_template: '{{ current.front_eve.owner == ''daily'' }}'
@@ -1321,16 +921,24 @@ script:
           - condition: template
             value_template: '{{ current.main_area.owner == ''49ers'' }}'
           sequence:
-          - action: scene.turn_on
-            target:
+          - action: home_lighting_reconciliation.render
+            data:
+              surface: main_area
+              expected_owner: "{{ current.main_area.owner }}"
+              command: scene.turn_on
               entity_id: '{{ current.main_area.scene }}'
+
         - conditions:
           - condition: template
             value_template: '{{ current.main_area.owner == ''holiday'' }}'
           sequence:
-          - action: scene.turn_on
-            target:
+          - action: home_lighting_reconciliation.render
+            data:
+              surface: main_area
+              expected_owner: "{{ current.main_area.owner }}"
+              command: scene.turn_on
               entity_id: '{{ current.main_area.scene }}'
+
         - conditions:
           - condition: template
             value_template: '{{ current.main_area.owner == ''daily'' }}'

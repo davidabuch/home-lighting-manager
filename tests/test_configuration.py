@@ -503,13 +503,8 @@ def test_hlm_main_area_release_bridge_clears_all_legacy_manual_helpers():
     }
 
 
-def test_path_state_applier_respects_hlm_manual_off_projection():
-    """Path renderer must not overwrite full or partial HLM Manual-OFF ownership."""
-
-    script = PACKAGE["script"]["home_lighting_apply_path_state"]
-    source = yaml.safe_dump(script, sort_keys=False)
-
-    assert "reconciliation_protected_entities" in source
-    assert "protected_path_entities" in source
-    assert "HLM Manual-OFF owns the full Driveway Path." in source
-    assert "light.turn_off" in source
+def test_path_state_applier_uses_shared_dispatch_without_restore_after_recall():
+    source = yaml.safe_dump(PACKAGE["script"]["home_lighting_apply_path_state"])
+    assert "home_lighting_reconciliation.render" in source
+    assert "protected_path_entities" not in source
+    assert "action: light.turn_off" not in source

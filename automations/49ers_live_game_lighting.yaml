@@ -69,11 +69,23 @@
       - repeat:
           count: '{{ points_scored | int }}'
           sequence:
-          - action: light.turn_on
-            target:
-              entity_id: light.celebration
-            data:
-              flash: short
+          - parallel:
+            - action: home_lighting_reconciliation.render
+              data:
+                surface: main_area
+                expected_owner: 49ers
+                command: light.turn_on
+                entity_id: light.holiday_main_area
+                parameters:
+                  flash: short
+            - action: home_lighting_reconciliation.render
+              data:
+                surface: front_eve
+                expected_owner: 49ers
+                command: light.turn_on
+                entity_id: light.front_eve_zone
+                parameters:
+                  flash: short
           - delay:
               milliseconds: 1500
       - action: script.home_lighting_evaluate_and_apply

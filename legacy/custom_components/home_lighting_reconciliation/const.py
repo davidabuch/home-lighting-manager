@@ -38,3 +38,11 @@ CONTROL = {
     *(f"sensor.{s}_last_recall" for s in ("main_area", "front_eve", "path", "backyard")),
     HLM_DIAGNOSTIC,
 }
+
+# Declarative renderer aliases; scope is always resolved from canonical Hue members.
+GROUP_ALIASES = {
+    "main_area": ("light.holiday_main_area",),
+    "front_eve": ("light.front_eve_zone",),
+    "path": ("light.holiday_path", "light.driveway_path_lights"),
+    "backyard": ("light.holiday_backyard", "light.backyard"),
+}

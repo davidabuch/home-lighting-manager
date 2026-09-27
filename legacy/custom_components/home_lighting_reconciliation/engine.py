@@ -50,6 +50,12 @@ def commands_in(sequence):
         elif "if" in step:
             # Only the existing liquor-door conditional occurs in baselines.
             result.extend(commands_in(step["then"]))
+        elif step.get("action") == "home_lighting_reconciliation.render":
+            request = step["data"]
+            result.extend(commands_in([{
+                "action": request["command"], "target": {"entity_id": request["entity_id"]},
+                "data": request.get("parameters", {}),
+            }]))
         elif step.get("action") in ("light.turn_on", "light.turn_off", "scene.turn_on"):
             entities = step["target"]["entity_id"]
             if isinstance(entities, str):
@@ -107,6 +113,7 @@ def verify(owners, states, scripts, members, scene_info, suppressed=None):
     for surface in SURFACES:
         owner = owners[surface]["owner"]
         manual_entities = set(owners[surface].get("manual_entities", []))
+        manual_entities.update(owners[surface].get("excluded_entities", []))
         if surface in suppressed or owner in ("sync", "manual", "spa"):
             out.skipped[surface] = suppressed.get(surface, owner)
             # Manual has a functional liquor exception; Sync and transients do not.
@@ -121,6 +128,9 @@ def verify(owners, states, scripts, members, scene_info, suppressed=None):
         if surface not in members or not members[surface]:
             out.issues.append({"surface": surface, "error": "unresolved group membership"})
             continue
+        for entity in owners[surface].get("manual_off_entities", ()):
+            if entity in members[surface] and not (entity == LIQUOR and door):
+                _static(out, surface, states, "light.turn_off", entity, {"transition": 0})
         if owner == "off":
             for entity in members[surface]:
                 if entity in manual_entities:
@@ -191,6 +201,8 @@ def _static(out, surface, states, service, entity, data):
 
 def _scene(out, surface, scene, states, scene_info, members, door, protected=None):
     protected = set(protected or ())
+    if set(members).issubset(protected | ({LIQUOR} if door else set())):
+        return
     info = scene_info.get(scene)
     if not info or info.get("error"):
         out.issues.append(

@@ -1,7 +1,8 @@
 """Legacy physical execution of HLM's read-only effective ownership contract.
 
-No intent classification or ownership mutation belongs here. All awaits invalidate
-plans when the ownership projection changes. Mixed scenes use native light actions,
+No intent classification or ownership mutation belongs here. Awaited work is invalidated
+when effective ownership semantics change; diagnostic-only revision churn is ignored.
+Mixed scenes use native light actions,
 not a whole scene followed by restoration of protected members.
 """
 
@@ -45,6 +46,19 @@ def projection(hass):
         ):
             raise ValueError("Invalid HLM Manual-OFF projection")
     return deepcopy(value)
+
+
+def same_effective_ownership(current, initial):
+    """Compare executable ownership semantics, not diagnostic revision churn."""
+    if not current or not initial:
+        return current == initial
+    return (
+        current.get("authority_id") == initial.get("authority_id")
+        and current.get("generation") == initial.get("generation")
+        and current.get("automatic_authority") == initial.get("automatic_authority")
+        and current.get("entities") == initial.get("entities")
+        and current.get("groups") == initial.get("groups")
+    )
 
 
 def project_owners(hass, owners, members):
@@ -97,7 +111,7 @@ async def render(adapter, surface, service, entities, parameters, context, expec
         return
     initial = projection(hass)
     owners = await adapter.owners()
-    if projection(hass) != initial:
+    if not same_effective_ownership(projection(hass), initial):
         return
     if expected_owner is not None and owners[surface]["owner"] != expected_owner:
         adapter.render_note(surface, "obsolete_automatic_owner", entities)
@@ -125,7 +139,7 @@ async def render(adapter, surface, service, entities, parameters, context, expec
     scenes = entities if service == "scene.turn_on" else []
     members, metadata = await adapter.hue.read(scenes, [surface])
     refreshed = await adapter.owners()
-    if projection(hass) != initial or refreshed != owners:
+    if not same_effective_ownership(projection(hass), initial) or refreshed != owners:
         adapter.render_note(surface, "stale_plan", entities)
         return
     group = set(members.get(surface, ()))
@@ -161,7 +175,7 @@ async def render(adapter, surface, service, entities, parameters, context, expec
     async def valid():
         current_owners = await adapter.owners()
         return (
-            projection(hass) == initial
+            same_effective_ownership(projection(hass), initial)
             and current_owners == owners
             and adapter.active_scripts() == scripts
         )

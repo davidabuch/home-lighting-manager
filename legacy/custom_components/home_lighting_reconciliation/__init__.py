@@ -194,7 +194,7 @@ class Adapter:
             context=context,
         )
         # Final live checks after guard activation. No network IO here.
-        current = await self.owners()
+        current = self.with_hlm_protection(await self.owners(), members)
         if (
             not valid()
             or current != owners

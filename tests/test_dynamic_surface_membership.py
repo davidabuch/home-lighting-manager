@@ -1,7 +1,6 @@
 from datetime import timedelta
 
 import pytest
-
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 

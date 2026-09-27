@@ -138,7 +138,7 @@ class Adapter:
             monitored_scene_id = monitor.attributes.get("scene_id")
             if not isinstance(monitored_scene_id, str) or not monitored_scene_id:
                 continue
-            for entity, info in result.items():
+            for _entity, info in result.items():
                 if (
                     info.get("hue_scene_id") == monitored_scene_id
                     and info.get("latest") is False

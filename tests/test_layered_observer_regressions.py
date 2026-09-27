@@ -1090,3 +1090,204 @@ async def test_observer_reset_clears_manual_off_and_starts_fresh_correlation_epo
     finally:
         await observer.async_shutdown()
         await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_displaced_backyard_scene_with_broad_surface_burst_creates_exact_manual_group(tmp_path):
+    """Hue scene displacement plus broad surface corroboration covers unchanged bulbs safely."""
+    from homeassistant.util import dt as dt_util
+
+    leaves = tuple(f"light.backyard_leaf_{index}" for index in range(12))
+    aggregate = "light.holiday_backyard"
+    hass = HomeAssistant(str(tmp_path))
+    hass.config.time_zone = "America/Los_Angeles"
+    observer = PromotingHomeAssistantShadowObserver(
+        hass,
+        [*leaves, aggregate],
+        {},
+    )
+    await observer.async_start()
+    try:
+        for index, leaf in enumerate(leaves):
+            hass.states.async_set(
+                leaf,
+                "on",
+                {
+                    "brightness": 100 + index,
+                    "color_mode": "xy",
+                    "xy_color": [0.2 + index / 1000, 0.3],
+                    "dynamics": "none",
+                },
+                context=Context(parent_id="topology-seed"),
+            )
+        await seed_group(hass, aggregate, leaves, state="on")
+        hass.states.async_set("input_boolean.home_lighting_ha_guard_backyard", "off")
+        hass.states.async_set("binary_sensor.hue_bridge_backyard", "off")
+        await hass.async_block_till_done()
+
+        recalled = dt_util.now().isoformat()
+        hass.states.async_set(
+            "sensor.backyard_last_recall",
+            recalled,
+            {
+                "scene_name": "Forest adventure",
+                "scene_id": "scene-forest",
+                "active": "dynamic_palette",
+            },
+        )
+        await hass.async_block_till_done()
+        hass.states.async_set(
+            "sensor.backyard_last_recall",
+            recalled,
+            {
+                "scene_name": "Forest adventure",
+                "scene_id": "scene-forest",
+                "active": "inactive",
+            },
+        )
+        await hass.async_block_till_done()
+
+        for index, leaf in enumerate(leaves[:9]):
+            hass.states.async_set(
+                leaf,
+                "on",
+                {
+                    "brightness": 180 + index,
+                    "color_mode": "xy",
+                    "xy_color": [0.4 + index / 1000, 0.2],
+                    "dynamics": "none",
+                },
+            )
+        await hass.async_block_till_done()
+        hass.states.async_set(
+            aggregate,
+            "on",
+            {"entity_id": list(leaves), "brightness": 188, "dynamics": "none"},
+        )
+        await hass.async_block_till_done()
+
+        op = observer.runtime.operations.latest_homeowner
+        assert op is not None
+        assert op["group_id"] == aggregate
+        assert op["kind"] == "appearance"
+        assert tuple(op["affected"]) == tuple(sorted(leaves))
+        for leaf in leaves:
+            layer = observer.runtime.engine.resolve(leaf).layer
+            assert layer is not None and layer.kind is LayerKind.MANUAL
+            assert layer.group_id == aggregate
+
+        attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
+        assert set(attrs["reconciliation_protected_entities"]) == set(leaves)
+        assert attrs["precedence_configured_entities"] == 0
+        assert attrs["command_authority"] is False
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_broad_surface_burst_without_scene_displacement_stays_ambiguous(tmp_path):
+    """Broad context-less appearance churn alone must not manufacture homeowner ownership."""
+    leaves = tuple(f"light.backyard_leaf_{index}" for index in range(12))
+    aggregate = "light.holiday_backyard"
+    hass, observer = await observer_for(tmp_path, [*leaves, aggregate])
+    try:
+        for index, leaf in enumerate(leaves):
+            hass.states.async_set(
+                leaf,
+                "on",
+                {
+                    "brightness": 100 + index,
+                    "color_mode": "xy",
+                    "xy_color": [0.2 + index / 1000, 0.3],
+                    "dynamics": "none",
+                },
+                context=Context(parent_id="topology-seed"),
+            )
+        await seed_group(hass, aggregate, leaves, state="on")
+        hass.states.async_set("input_boolean.home_lighting_ha_guard_backyard", "off")
+        hass.states.async_set("binary_sensor.hue_bridge_backyard", "off")
+        await hass.async_block_till_done()
+
+        for index, leaf in enumerate(leaves[:9]):
+            hass.states.async_set(
+                leaf,
+                "on",
+                {
+                    "brightness": 180 + index,
+                    "color_mode": "xy",
+                    "xy_color": [0.4 + index / 1000, 0.2],
+                    "dynamics": "none",
+                },
+            )
+        await hass.async_block_till_done()
+        hass.states.async_set(
+            aggregate,
+            "on",
+            {"entity_id": list(leaves), "brightness": 188, "dynamics": "none"},
+        )
+        await hass.async_block_till_done()
+
+        assert observer.runtime.operations.latest_homeowner is None
+        assert all(observer.runtime.engine.resolve(leaf).layer is None for leaf in leaves)
+        attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
+        assert attrs["command_authority"] is False
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_guarded_scene_displacement_cannot_open_fallback_homeowner_window(tmp_path):
+    """HA-owned scene displacement remains automatic when the Backyard guard is active."""
+    from homeassistant.util import dt as dt_util
+
+    leaves = tuple(f"light.backyard_leaf_{index}" for index in range(12))
+    aggregate = "light.holiday_backyard"
+    hass, observer = await observer_for(tmp_path, [*leaves, aggregate])
+    try:
+        for index, leaf in enumerate(leaves):
+            hass.states.async_set(
+                leaf,
+                "on",
+                {"brightness": 100 + index, "dynamics": "none"},
+                context=Context(parent_id="topology-seed"),
+            )
+        await seed_group(hass, aggregate, leaves, state="on")
+        hass.states.async_set("input_boolean.home_lighting_ha_guard_backyard", "on")
+        hass.states.async_set("binary_sensor.hue_bridge_backyard", "off")
+        await hass.async_block_till_done()
+
+        recalled = dt_util.now().isoformat()
+        hass.states.async_set(
+            "sensor.backyard_last_recall",
+            recalled,
+            {"scene_id": "scene-forest", "active": "dynamic_palette"},
+        )
+        await hass.async_block_till_done()
+        hass.states.async_set(
+            "sensor.backyard_last_recall",
+            recalled,
+            {"scene_id": "scene-forest", "active": "inactive"},
+        )
+        await hass.async_block_till_done()
+
+        for index, leaf in enumerate(leaves[:9]):
+            hass.states.async_set(
+                leaf,
+                "on",
+                {"brightness": 180 + index, "dynamics": "none"},
+            )
+        await hass.async_block_till_done()
+        hass.states.async_set(
+            aggregate,
+            "on",
+            {"entity_id": list(leaves), "brightness": 188, "dynamics": "none"},
+        )
+        await hass.async_block_till_done()
+
+        assert observer.runtime.operations.latest_homeowner is None
+        assert all(observer.runtime.engine.resolve(leaf).layer is None for leaf in leaves)
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()

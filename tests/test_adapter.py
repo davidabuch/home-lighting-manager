@@ -755,3 +755,80 @@ async def test_hlm_full_path_manual_off_is_healthy_daily_exception(rig):
         issue.get("surface") == "path" and "difference" in issue
         for issue in check.issues
     )
+
+
+def test_scene_monitor_corroborates_exact_active_unprotected_scene(rig):
+    a, _args = adapter_for(rig)
+    scene = "scene.backyard_backyard_forest_adventure"
+    scene_id = "forest-scene-id"
+    owners = {
+        surface: {"owner": "off", "manual_entities": []}
+        for surface in ("main_area", "front_eve", "path", "backyard")
+    }
+    owners["backyard"] = {"owner": "daily", "manual_entities": []}
+    rig.set(
+        "sensor.backyard_last_recall",
+        "2026-09-27T14:45:18+00:00",
+        {
+            "scene_id": scene_id,
+            "scene_name": "Forest adventure",
+            "active": "dynamic_palette",
+        },
+    )
+    metadata = {
+        scene: {
+            "actions": {"light.example": {"action": {"on": {"on": True}}}},
+            "latest": False,
+            "hue_scene_id": scene_id,
+        }
+    }
+
+    result = a.with_scene_monitor_corroboration(owners, metadata)
+
+    assert result[scene]["latest"] is True
+    assert result[scene]["latest_corroborated_by"] == "sensor.backyard_last_recall"
+    assert metadata[scene]["latest"] is False
+
+
+@pytest.mark.parametrize(
+    ("active", "manual_entities", "monitor_scene_id"),
+    (
+        ("inactive", [], "forest-scene-id"),
+        ("dynamic_palette", ["light.backyard_behind_pool_1"], "forest-scene-id"),
+        ("dynamic_palette", [], "different-scene-id"),
+    ),
+)
+def test_scene_monitor_corroboration_fails_closed(
+    rig, active, manual_entities, monitor_scene_id
+):
+    a, _args = adapter_for(rig)
+    scene = "scene.backyard_backyard_forest_adventure"
+    owners = {
+        surface: {"owner": "off", "manual_entities": []}
+        for surface in ("main_area", "front_eve", "path", "backyard")
+    }
+    owners["backyard"] = {
+        "owner": "daily",
+        "manual_entities": manual_entities,
+    }
+    rig.set(
+        "sensor.backyard_last_recall",
+        "2026-09-27T14:45:18+00:00",
+        {
+            "scene_id": monitor_scene_id,
+            "scene_name": "Forest adventure",
+            "active": active,
+        },
+    )
+    metadata = {
+        scene: {
+            "actions": {"light.example": {"action": {"on": {"on": True}}}},
+            "latest": False,
+            "hue_scene_id": "forest-scene-id",
+        }
+    }
+
+    result = a.with_scene_monitor_corroboration(owners, metadata)
+
+    assert result[scene]["latest"] is False
+    assert "latest_corroborated_by" not in result[scene]

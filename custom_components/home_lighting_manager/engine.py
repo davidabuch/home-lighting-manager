@@ -661,7 +661,11 @@ class OwnershipEngine:
         ):
             raise ValueError("managed entities must be valid light entity IDs")
 
-        current = self.managed_entities or frozenset(self._layers)
+        current = (
+            self.managed_entities
+            if self.managed_entities is not None
+            else frozenset(self._layers)
+        )
         if desired == current:
             return {"added": (), "removed": ()}
 

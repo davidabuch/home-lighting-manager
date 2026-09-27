@@ -298,6 +298,7 @@ class OwnershipOperations:
                 key: members[:32]
                 for key, members in list(self.engine.group_off_sequences().items())[:16]
             },
+            "group_off_removals": self.engine.group_off_changes(),
             "last_mutation_reason": self.engine.last_mutation_reason,
             "latest_homeowner_operation": bounded(self.latest_homeowner),
             "latest_operation_rejection": self.latest_rejection,

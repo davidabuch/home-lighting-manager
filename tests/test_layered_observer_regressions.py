@@ -1070,9 +1070,9 @@ async def test_observer_reset_clears_manual_off_and_starts_fresh_correlation_epo
     group = "light.reset_group"
     hass, observer = await observer_for(tmp_path, [*leaves, group])
     try:
+        observer.runtime.engine.apply_group_off(group, leaves)
         for leaf in leaves:
             observer.runtime.engine.push_manual_off(leaf)
-        observer.runtime.engine.apply_group_off(group, leaves)
         observer._pending_external_leaves[leaves[0]] = object()
         observer._external_group_burst_topology = {group: tuple(leaves)}
 

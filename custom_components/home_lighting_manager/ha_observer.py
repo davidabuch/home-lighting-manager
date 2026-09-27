@@ -156,8 +156,7 @@ class HomeAssistantShadowObserver:
 
     async def async_reset_homeowner_control(self) -> dict[str, int]:
         """Start a fresh homeowner-observation epoch without commanding any lights."""
-        result = self.runtime.engine.reset_homeowner_control()
-        self.runtime.operations = type(self.runtime.operations)(self.runtime.engine)
+        result = self.runtime.reset_homeowner_control()
         self._external_correlator.reset()
         self._external_burst = None
         self._post_boundary_off_entities = set(self.manual_precedence)

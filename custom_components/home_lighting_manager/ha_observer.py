@@ -51,6 +51,7 @@ MANAGED_SURFACE_GROUPS = {
     "backyard": "light.holiday_backyard",
 }
 SURFACE_MEMBERSHIP_REMOVAL_CONFIRM_SECONDS = 5.0
+SURFACE_MANUAL_PRECEDENCE = 250
 STORAGE_KEY = f"{DOMAIN}.shadow"
 RUNTIME_DATA_KEY = f"{DOMAIN}_shadow_runtime"
 DIAGNOSTIC_ENTITY_ID = "sensor.home_lighting_manager_shadow_health"
@@ -91,7 +92,8 @@ class HomeAssistantShadowObserver:
         self.hass = hass
         self._configured_entity_ids = frozenset(entity_ids)
         self.entity_ids = frozenset(entity_ids)
-        self.manual_precedence = dict(manual_precedence or {})
+        self._configured_manual_precedence = dict(manual_precedence or {})
+        self.manual_precedence = dict(self._configured_manual_precedence)
         self.surface_exclusions = {
             surface: frozenset(items)
             for surface, items in (surface_exclusions or {}).items()
@@ -123,7 +125,8 @@ class HomeAssistantShadowObserver:
         # dynamically discovered members for persisted ownership recovery without
         # incrementing engine revision and thereby closing the recovery window.
         self._topology_members = self._snapshot_topology_cache()
-        self._seed_surface_membership(self._topology_members)
+        persisted_surface_members = _persisted_surface_members(raw, self.surface_exclusions)
+        self._seed_surface_membership(self._topology_members, persisted_surface_members)
         self.runtime = ShadowRuntime(generation=generation, managed_entities=self.entity_ids)
 
         if isinstance(raw, dict):
@@ -202,6 +205,10 @@ class HomeAssistantShadowObserver:
         payload["post_boundary_off_entities"] = sorted(
             self._post_boundary_off_entities
         )
+        payload["managed_surface_members"] = {
+            surface: list(self._surface_members_by_group.get(group_id, ()))
+            for surface, group_id in MANAGED_SURFACE_GROUPS.items()
+        }
         await self.store.async_save(payload)
         self._storage_status = "saved"
         self._publish_diagnostics()
@@ -313,30 +320,43 @@ class HomeAssistantShadowObserver:
 
     @callback
     def _seed_surface_membership(
-        self, cache: dict[str, tuple[str, ...]]
+        self,
+        cache: dict[str, tuple[str, ...]],
+        persisted: dict[str, tuple[str, ...]] | None = None,
     ) -> None:
-        """Establish startup membership without mutating engine revision."""
+        """Establish startup membership without mutating engine revision.
+
+        Persisted canonical membership prevents a removed historical static leaf from
+        reappearing after restart. Live additions are safe to admit immediately;
+        apparent removals wait for the normal stability confirmation.
+        """
+        persisted = persisted or {}
         for surface, group_id in MANAGED_SURFACE_GROUPS.items():
-            raw = cache.get(group_id)
-            if not raw:
-                continue
-            observed = tuple(
-                sorted(set(raw) - set(self.surface_exclusions.get(surface, ())))
-            )
-            if observed:
-                self._surface_members_by_group[group_id] = observed
+            exclusions = set(self.surface_exclusions.get(surface, ()))
+            previous = set(persisted.get(surface, ())) - exclusions
+            raw = cache.get(group_id, ())
+            observed = set(raw) - exclusions
+            active = tuple(sorted(previous | observed))
+            if active:
+                self._surface_members_by_group[group_id] = active
 
         current_surface_members = {
             entity_id
             for members in self._surface_members_by_group.values()
             for entity_id in members
         }
-        self._surface_seen_members.update(current_surface_members)
+        historical_surface_members = {
+            entity_id
+            for members in persisted.values()
+            for entity_id in members
+        }
+        self._surface_seen_members.update(current_surface_members | historical_surface_members)
         static_entities = set(self._configured_entity_ids) - self._surface_seen_members
         desired = frozenset(static_entities | current_surface_members)
         if len(desired) > MAX_ENTITIES:
             raise ValueError("dynamic surface membership exceeds entity capacity")
         self.entity_ids = desired
+        self._refresh_surface_manual_precedence()
 
     @callback
     def _refresh_topology_cache(self) -> None:
@@ -424,6 +444,7 @@ class HomeAssistantShadowObserver:
             raise ValueError("dynamic surface membership exceeds entity capacity")
 
         self.entity_ids = desired
+        self._refresh_surface_manual_precedence()
         membership = self.runtime.update_managed_entities(desired)
         added = tuple(membership["added"])
         removed = tuple(membership["removed"])
@@ -458,8 +479,16 @@ class HomeAssistantShadowObserver:
     ) -> None:
         """Subclass hook for invalidating correlation evidence after topology changes."""
 
+    def _refresh_surface_manual_precedence(self) -> None:
+        """Apply one canonical Manual ingress policy to every current surface leaf."""
+        policy = dict(self._configured_manual_precedence)
+        for members in self._surface_members_by_group.values():
+            for entity_id in members:
+                policy.setdefault(entity_id, SURFACE_MANUAL_PRECEDENCE)
+        self.manual_precedence = policy
+
     def _boundary_managed_entities(self) -> set[str]:
-        return set(self.manual_precedence) | {
+        return set(self._configured_manual_precedence) | {
             entity_id
             for members in self._surface_members_by_group.values()
             for entity_id in members
@@ -603,6 +632,7 @@ class HomeAssistantShadowObserver:
                 for surface, items in self.surface_exclusions.items()
                 if items
             },
+            "managed_surface_manual_precedence": SURFACE_MANUAL_PRECEDENCE,
         }
         attrs.update(self.runtime.ownership_diagnostics())
         attrs.update(self.off_attempt_diagnostics())
@@ -756,6 +786,44 @@ def _optional_int_tuple(value: Any, length: int) -> tuple[int, ...] | None:
     if not all(isinstance(item, int) and not isinstance(item, bool) for item in value):
         return None
     return tuple(value)
+
+
+def _persisted_surface_members(
+    raw: Any,
+    exclusions: dict[str, frozenset[str]],
+) -> dict[str, tuple[str, ...]]:
+    """Return bounded canonical membership evidence persisted by the prior runtime."""
+    if not isinstance(raw, dict):
+        return {}
+    payload = raw.get("managed_surface_members")
+    if not isinstance(payload, dict):
+        return {}
+
+    result: dict[str, tuple[str, ...]] = {}
+    total = 0
+    for surface in MANAGED_SURFACE_GROUPS:
+        items = payload.get(surface)
+        if not isinstance(items, list):
+            continue
+        blocked = exclusions.get(surface, frozenset())
+        members = tuple(
+            sorted(
+                {
+                    item
+                    for item in items
+                    if isinstance(item, str)
+                    and item.startswith("light.")
+                    and len(item) <= 256
+                    and item not in blocked
+                }
+            )
+        )
+        total += len(members)
+        if total > MAX_ENTITIES:
+            return {}
+        if members:
+            result[surface] = members
+    return result
 
 
 def _next_generation(raw: Any) -> int:

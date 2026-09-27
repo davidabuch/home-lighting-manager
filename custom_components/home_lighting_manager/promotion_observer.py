@@ -1284,8 +1284,14 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         group_id = resolve_unique_exact_group(
             leaf_entities=leaf_entities,
             observed_aggregate_entities=aggregate_entities,
-            topology_members=managed_topology,
+            topology_members=burst_topology,
         )
+        if group_id is None:
+            group_id = resolve_unique_exact_group(
+                leaf_entities=leaf_entities,
+                observed_aggregate_entities=aggregate_entities,
+                topology_members=managed_topology,
+            )
 
         # An already-armed group owns the next OFF interaction for its exact member
         # set. Nested Hue aggregates from the same physical command must not create a

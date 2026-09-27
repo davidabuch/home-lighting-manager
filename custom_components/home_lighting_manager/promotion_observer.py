@@ -400,7 +400,11 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             )
 
         dynamics = new_state.attributes.get("dynamics")
-        if isinstance(dynamics, str) and dynamics not in ("", "none"):
+        if (
+            new_state.state != "off"
+            and isinstance(dynamics, str)
+            and dynamics not in ("", "none")
+        ):
             return "active Hue dynamics are automatic scene telemetry"
 
         matching_guards = [

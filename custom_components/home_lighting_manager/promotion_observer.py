@@ -620,16 +620,14 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
 
     @callback
     def _managed_group_members(self, members: tuple[str, ...] | list[str]) -> tuple[str, ...]:
-        """Project raw Hue group membership onto entities HLM may own."""
-        return tuple(
-            sorted(
-                {
-                    entity_id
-                    for entity_id in members
-                    if entity_id in self.manual_precedence
-                }
-            )
+        """Project raw Hue membership onto the ownership-capable HLM subset."""
+        raw = tuple(sorted(set(members)))
+        precedence_members = tuple(
+            entity_id for entity_id in raw if entity_id in self.manual_precedence
         )
+        if precedence_members:
+            return precedence_members
+        return tuple(entity_id for entity_id in raw if entity_id in self.entity_ids)
 
     @callback
     def _managed_group_topology(

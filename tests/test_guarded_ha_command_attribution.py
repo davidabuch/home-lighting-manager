@@ -2,9 +2,9 @@ import pytest
 from homeassistant.core import Context, HomeAssistant
 
 from custom_components.home_lighting_manager.ha_observer import (
-    HomeAssistantShadowObserver,
     MANAGED_SURFACE_GROUPS,
     SURFACE_MANUAL_PRECEDENCE,
+    HomeAssistantShadowObserver,
     observation_from_state_change,
 )
 from custom_components.home_lighting_manager.intent_policy import (

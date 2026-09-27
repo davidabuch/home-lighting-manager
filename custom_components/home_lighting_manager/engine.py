@@ -642,6 +642,39 @@ class OwnershipEngine:
         """Current-runtime group-OFF arming; never durable Manual-OFF ownership."""
         return {group: tuple(sorted(members)) for group, members in self._group_off_armed.items()}
 
+    def update_managed_entities(self, entity_ids: frozenset[str]) -> dict[str, tuple[str, ...]]:
+        """Change the admitted entity scope without fabricating ownership.
+
+        Retained entities keep their current layers. Newly admitted entities start with
+        no layers, so topology alone can never create Manual intent. Removed entities
+        lose any retained ownership state and every armed group-OFF sequence is cleared
+        because its membership receipt is no longer current.
+        """
+        desired = frozenset(entity_ids)
+        if len(desired) > MAX_ENTITIES:
+            raise ValueError("managed entity capacity exceeded")
+        if any(
+            not isinstance(entity_id, str)
+            or not entity_id.startswith("light.")
+            or len(entity_id) > 256
+            for entity_id in desired
+        ):
+            raise ValueError("managed entities must be valid light entity IDs")
+
+        current = self.managed_entities or frozenset(self._layers)
+        if desired == current:
+            return {"added": (), "removed": ()}
+
+        added = tuple(sorted(desired - current))
+        removed = tuple(sorted(current - desired))
+        for entity_id in removed:
+            self._layers.pop(entity_id, None)
+
+        self.managed_entities = desired
+        self._clear_group_off("managed_entities_changed")
+        self._changed("managed_entities_changed")
+        return {"added": added, "removed": removed}
+
     def reconfigure(self, entity_ids: frozenset[str]) -> int:
         """Discard old scopes/authority; current truth must be reconstructed by the caller."""
         self.managed_entities = frozenset(entity_ids)

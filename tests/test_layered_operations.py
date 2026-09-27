@@ -454,11 +454,11 @@ def test_diagnostics_cap_entities_layers_sessions_and_members():
 
 def test_reset_homeowner_control_clears_manual_state_but_preserves_automatic_layers():
     runtime = setup()
-    runtime.observe_operation(operation(1))
-    runtime.observe_operation(operation(2, members=(B,), kind="off", appearance=None))
+    runtime.engine.apply_group_off("light.main", [A, B])
+    runtime.engine.push_manual_off(A)
+    runtime.engine.push_manual_off(B)
     runtime.engine.start_family("49ers", "game-1", sequence=1)
     runtime.engine.suppress_family("49ers", "game-1", "homeowner_override")
-    runtime.engine.apply_group_off("light.main", [A, B])
 
     before_generation = runtime.engine.generation
     result = runtime.reset_homeowner_control()

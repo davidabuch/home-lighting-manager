@@ -1291,3 +1291,106 @@ async def test_guarded_scene_displacement_cannot_open_fallback_homeowner_window(
     finally:
         await observer.async_shutdown()
         await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_displaced_backyard_scene_survives_noisy_bridge_burst_overflow(tmp_path):
+    """Unique displaced-scene evidence survives repeated Hue telemetry beyond burst capacity."""
+    from homeassistant.util import dt as dt_util
+
+    leaves = tuple(f"light.backyard_slow_leaf_{index}" for index in range(12))
+    aggregate = "light.holiday_backyard"
+    hass = HomeAssistant(str(tmp_path))
+    hass.config.time_zone = "America/Los_Angeles"
+    observer = PromotingHomeAssistantShadowObserver(hass, [*leaves, aggregate], {})
+    await observer.async_start()
+    try:
+        for index, leaf in enumerate(leaves):
+            hass.states.async_set(
+                leaf,
+                "on",
+                {
+                    "brightness": 90 + index,
+                    "color_mode": "xy",
+                    "xy_color": [0.2 + index / 1000, 0.3],
+                    "dynamics": "none",
+                },
+                context=Context(parent_id="topology-seed"),
+            )
+        await seed_group(hass, aggregate, leaves, state="on")
+        hass.states.async_set("input_boolean.home_lighting_ha_guard_backyard", "off")
+        hass.states.async_set("binary_sensor.hue_bridge_backyard", "off")
+        await hass.async_block_till_done()
+
+        recalled = dt_util.now().isoformat()
+        hass.states.async_set(
+            "sensor.backyard_last_recall",
+            recalled,
+            {"scene_id": "scene-forest", "active": "dynamic_palette"},
+        )
+        await hass.async_block_till_done()
+        hass.states.async_set(
+            "sensor.backyard_last_recall",
+            recalled,
+            {"scene_id": "scene-forest", "active": "inactive"},
+        )
+        await hass.async_block_till_done()
+
+        for index, leaf in enumerate(leaves[:8]):
+            hass.states.async_set(
+                leaf,
+                "on",
+                {
+                    "brightness": 170 + index,
+                    "color_mode": "xy",
+                    "xy_color": [0.45 + index / 1000, 0.2],
+                    "dynamics": "none",
+                },
+            )
+        hass.states.async_set(
+            aggregate,
+            "on",
+            {"entity_id": list(leaves), "brightness": 188, "dynamics": "none"},
+        )
+        await hass.async_block_till_done()
+
+        # Repeated bridge telemetry can overflow the ordinary 128-event burst.
+        for step in range(140):
+            leaf = leaves[step % 8]
+            hass.states.async_set(
+                leaf,
+                "on",
+                {
+                    "brightness": 180 + (step % 40),
+                    "color_mode": "xy",
+                    "xy_color": [0.5 + (step % 20) / 1000, 0.2],
+                    "dynamics": "none",
+                },
+            )
+        await hass.async_block_till_done()
+
+        assert observer.runtime.operations.latest_homeowner is None
+
+        hass.states.async_set(
+            leaves[8],
+            "on",
+            {
+                "brightness": 199,
+                "color_mode": "xy",
+                "xy_color": [0.54, 0.2],
+                "dynamics": "none",
+            },
+        )
+        await hass.async_block_till_done()
+
+        op = observer.runtime.operations.latest_homeowner
+        assert op is not None
+        assert op["group_id"] == aggregate
+        assert op["kind"] == "appearance"
+        assert tuple(op["affected"]) == tuple(sorted(leaves))
+        attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
+        assert set(attrs["reconciliation_protected_entities"]) == set(leaves)
+        assert attrs["command_authority"] is False
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()

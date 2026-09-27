@@ -121,6 +121,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         self._scene_recall_settle_until: dict[str, datetime] = {}
         self._scene_displacement_until: dict[str, datetime] = {}
         self._scene_displacement_evidence: dict[str, dict[str, object]] = {}
+        self._recent_surface_appearance_evidence: dict[str, dict[str, object]] = {}
 
     async def _async_state_changed(self, event: Event) -> None:
         """Consume authoritative Hue scene recalls before ordinary light telemetry."""
@@ -174,9 +175,22 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
                 self._scene_displacement_until[aggregate_id] = dt_util.now() + timedelta(
                     seconds=SCENE_DISPLACEMENT_CORROBORATION_SECONDS
                 )
+                recent = self._recent_surface_appearance_evidence.get(aggregate_id, {})
+                recent_at = recent.get("updated_at")
+                recent_leaves = recent.get("leaf_entities")
+                leaf_entities = set()
+                aggregate_seen = False
+                if (
+                    isinstance(recent_at, datetime)
+                    and (dt_util.now() - recent_at).total_seconds()
+                    <= SCENE_DISPLACEMENT_CORROBORATION_SECONDS
+                ):
+                    if isinstance(recent_leaves, set):
+                        leaf_entities = set(recent_leaves)
+                    aggregate_seen = recent.get("aggregate_seen") is True
                 self._scene_displacement_evidence[aggregate_id] = {
-                    "leaf_entities": set(),
-                    "aggregate_seen": False,
+                    "leaf_entities": leaf_entities,
+                    "aggregate_seen": aggregate_seen,
                 }
             return
 
@@ -290,6 +304,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         self._scene_recall_settle_until.clear()
         self._scene_displacement_until.clear()
         self._scene_displacement_evidence.clear()
+        self._recent_surface_appearance_evidence.clear()
         self._last_external_promotion_key = None
         self._last_external_promotion_outcome = None
         self._last_external_group_promotion_key = None
@@ -322,6 +337,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         self._external_group_last_observed_at = None
         self._scene_displacement_until.clear()
         self._scene_displacement_evidence.clear()
+        self._recent_surface_appearance_evidence.clear()
         super()._handle_nightly_boundary(now)
 
     @callback
@@ -408,6 +424,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
                 "has_parent_id": observation.evidence.has_parent_id,
             })
         self._prune_pending_external_leaves(observed_at)
+        self._record_recent_surface_appearance(observation, new_state, members, observed_at)
 
         super()._record_external_topology(observation, new_state)
         burst = self._external_burst
@@ -459,6 +476,48 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             current_entity_id=observation.entity_id,
             burst_topology=self._external_group_burst_topology,
         )
+
+    @callback
+    def _record_recent_surface_appearance(
+        self,
+        observation: ShadowObservation,
+        new_state: State,
+        members: tuple[str, ...],
+        observed_at: datetime,
+    ) -> None:
+        """Retain only brief unique appearance evidence for commissioned surfaces."""
+        if observation.operation != "appearance":
+            return
+        for aggregate_id, _guard_id in _SURFACE_GUARDS:
+            exact_members = frozenset(self._topology_members.get(aggregate_id, ()))
+            if len(exact_members) < 2:
+                continue
+            is_aggregate = observation.entity_id == aggregate_id and bool(members)
+            is_leaf = observation.entity_id in exact_members and not members
+            if not is_aggregate and not is_leaf:
+                continue
+            evidence = self._recent_surface_appearance_evidence.get(aggregate_id)
+            updated_at = evidence.get("updated_at") if isinstance(evidence, dict) else None
+            if (
+                not isinstance(updated_at, datetime)
+                or (observed_at - updated_at).total_seconds()
+                > SCENE_DISPLACEMENT_CORROBORATION_SECONDS
+            ):
+                evidence = {"leaf_entities": set(), "aggregate_seen": False}
+                self._recent_surface_appearance_evidence[aggregate_id] = evidence
+            leaf_entities = evidence.get("leaf_entities")
+            if not isinstance(leaf_entities, set):
+                leaf_entities = set()
+                evidence["leaf_entities"] = leaf_entities
+            if is_aggregate:
+                evidence["aggregate_seen"] = True
+            elif (
+                observation.appearance is not None
+                and self._automatic_external_evidence_reason(observation.entity_id, new_state)
+                is None
+            ):
+                leaf_entities.add(observation.entity_id)
+            evidence["updated_at"] = observed_at
 
     @callback
     def _reset_external_burst_for_cross_surface_leaf(self, entity_id: str) -> None:

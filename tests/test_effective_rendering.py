@@ -69,6 +69,7 @@ def publish(rig, runtime, members):
             "command_authority": False,
             "manual_precedence_entities": list(members),
             "reconciliation_protected_entities": runtime.reconciliation_protected_entities(),
+            "last_mutation_reason": runtime.engine.last_mutation_reason,
             "effective_ownership": effective_ownership(
                 runtime.engine,
                 members,
@@ -212,6 +213,39 @@ async def test_changed_projection_during_hue_read_cancels_old_scene_plan(rig, bo
     await evaluate(rig, "backyard")
     assert not rig.lights() and not touched(rig)
     assert rig.renderer.runner.diag["last_render"]["reason"] == "stale_plan"
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_revision_churn_does_not_abort_surface_off(rig):
+    runtime, members = setup(rig, "backyard", "off")
+    rig.set("input_boolean.home_lighting_backyard_window", "off")
+    for entity in members:
+        rig.set(entity, "on")
+    publish(rig, runtime, members)
+    churned = False
+
+    async def diagnostic_churn(call):
+        nonlocal churned
+        if call.domain == "light" and call.service == "turn_off" and not churned:
+            churned = True
+            runtime.engine.invalidate_work("guarded_physical_telemetry")
+            publish(rig, runtime, members)
+
+    rig.before_service = diagnostic_churn
+    await rig.hass.services.async_call(
+        "home_lighting_reconciliation",
+        "render",
+        {
+            "surface": "backyard",
+            "command": "light.turn_off",
+            "entity_id": "light.backyard",
+            "parameters": {"transition": 0},
+        },
+        blocking=True,
+    )
+    assert churned
+    assert all(rig.get(e).state == "off" for e in members)
+    assert rig.renderer.runner.diag["last_render"]["reason"] == "selective_light_command"
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,8 @@
 """Legacy physical execution of HLM's read-only effective ownership contract.
 
-No intent classification or ownership mutation belongs here. All awaits invalidate
-plans when the ownership projection changes. Mixed scenes use native light actions,
+No intent classification or ownership mutation belongs here. Awaited work is invalidated
+when effective ownership semantics change; diagnostic-only revision churn is ignored.
+Mixed scenes use native light actions,
 not a whole scene followed by restoration of protected members.
 """
 
@@ -45,6 +46,58 @@ def projection(hass):
         ):
             raise ValueError("Invalid HLM Manual-OFF projection")
     return deepcopy(value)
+
+
+def same_effective_ownership(current, initial):
+    """Compare executable ownership semantics, not diagnostic revision churn."""
+    if not current or not initial:
+        return current == initial
+    return (
+        current.get("authority_id") == initial.get("authority_id")
+        and current.get("generation") == initial.get("generation")
+        and current.get("automatic_authority") == initial.get("automatic_authority")
+        and current.get("entities") == initial.get("entities")
+        and current.get("groups") == initial.get("groups")
+    )
+
+
+INVALIDATING_MUTATION_REASONS = {
+    "ownership_reset",
+    "evening_activation",
+    "managed_entities_changed",
+    "configuration_generation_changed",
+    "group_off_sequence_reset",
+    "intervening_group_member_intent",
+    "family_ended",
+    "released_to_hlm",
+    "created_group_manual_off",
+}
+
+
+def projection_current(hass, initial):
+    """Keep plans only across non-semantic diagnostic revision churn."""
+    current = projection(hass)
+    if not same_effective_ownership(current, initial):
+        return False
+    if current.get("revision") == initial.get("revision"):
+        return True
+    state = hass.states.get(HLM_DIAGNOSTIC)
+    reason = state.attributes.get("last_mutation_reason") if state else None
+    if isinstance(reason, str) and (
+        reason in INVALIDATING_MUTATION_REASONS or reason.startswith("boundary:")
+    ):
+        return False
+    return True
+
+
+def same_resolved_owners(current, initial):
+    """Compare resolver policy while ignoring its diagnostic HLM projection echo."""
+    if not isinstance(current, dict) or not isinstance(initial, dict):
+        return current == initial
+    return (
+        {k: v for k, v in current.items() if k != "hlm_effective_ownership"}
+        == {k: v for k, v in initial.items() if k != "hlm_effective_ownership"}
+    )
 
 
 def project_owners(hass, owners, members):
@@ -97,7 +150,7 @@ async def render(adapter, surface, service, entities, parameters, context, expec
         return
     initial = projection(hass)
     owners = await adapter.owners()
-    if projection(hass) != initial:
+    if not projection_current(hass, initial):
         return
     if expected_owner is not None and owners[surface]["owner"] != expected_owner:
         adapter.render_note(surface, "obsolete_automatic_owner", entities)
@@ -125,7 +178,7 @@ async def render(adapter, surface, service, entities, parameters, context, expec
     scenes = entities if service == "scene.turn_on" else []
     members, metadata = await adapter.hue.read(scenes, [surface])
     refreshed = await adapter.owners()
-    if projection(hass) != initial or refreshed != owners:
+    if not projection_current(hass, initial) or not same_resolved_owners(refreshed, owners):
         adapter.render_note(surface, "stale_plan", entities)
         return
     group = set(members.get(surface, ()))
@@ -161,8 +214,8 @@ async def render(adapter, surface, service, entities, parameters, context, expec
     async def valid():
         current_owners = await adapter.owners()
         return (
-            projection(hass) == initial
-            and current_owners == owners
+            projection_current(hass, initial)
+            and same_resolved_owners(current_owners, owners)
             and adapter.active_scripts() == scripts
         )
 

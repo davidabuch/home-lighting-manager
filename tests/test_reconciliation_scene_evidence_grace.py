@@ -1,4 +1,4 @@
-import copy
+from copy import deepcopy
 
 import pytest
 
@@ -29,7 +29,7 @@ class FakeAdapter:
         return f"2026-09-27T18:00:{self._time:02d}+00:00"
 
     def publish(self, diag):
-        self.published.append(copy.deepcopy(diag))
+        self.published.append(deepcopy(diag))
 
     async def inspect(self):
         if len(self.checks) > 1:

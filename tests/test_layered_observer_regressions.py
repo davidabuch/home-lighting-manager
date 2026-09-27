@@ -1675,3 +1675,118 @@ async def test_all_surfaces_use_managed_subset_for_first_and_second_group_off(
     finally:
         await observer.async_shutdown()
         await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_backyard_first_group_off_survives_real_hue_fanout_beyond_two_seconds(tmp_path):
+    """Canonical surface OFF uses bounded retained evidence across ordinary burst rollover."""
+    from datetime import timedelta
+
+    from homeassistant.core import Context, HomeAssistant
+    from homeassistant.util import dt as dt_util
+
+    group_id = "light.holiday_backyard"
+    guard_id = "input_boolean.home_lighting_ha_guard_backyard"
+    sync_id = "binary_sensor.hue_bridge_backyard"
+    recall_sensor = "sensor.backyard_last_recall"
+    leaves = tuple(f"light.slow_backyard_{index}" for index in range(11))
+    unmanaged_extra = "light.slow_backyard_festavia"
+
+    hass = HomeAssistant(str(tmp_path))
+    hass.config.time_zone = "America/Los_Angeles"
+    observer = PromotingHomeAssistantShadowObserver(
+        hass,
+        [*leaves, group_id],
+        {},
+    )
+    await observer.async_start()
+    try:
+        for index, leaf in enumerate(leaves):
+            hass.states.async_set(
+                leaf,
+                "on",
+                {"brightness": 100 + index, "dynamics": "none"},
+                context=Context(parent_id="seed"),
+            )
+        hass.states.async_set(
+            unmanaged_extra,
+            "on",
+            {"brightness": 150, "dynamics": "none"},
+            context=Context(parent_id="seed"),
+        )
+        await seed_group(hass, group_id, (*leaves, unmanaged_extra), state="on")
+        hass.states.async_set(guard_id, "off")
+        hass.states.async_set(sync_id, "off")
+        await hass.async_block_till_done()
+
+        baseline = dt_util.now()
+        hass.states.async_set(
+            recall_sensor,
+            (baseline - timedelta(minutes=5)).isoformat(),
+            {"scene_name": "Daily", "scene_id": "daily"},
+        )
+        await hass.async_block_till_done()
+        hass.states.async_set(
+            recall_sensor,
+            baseline.isoformat(),
+            {"scene_name": "Manual", "scene_id": "manual"},
+        )
+        await hass.async_block_till_done()
+
+        assert all(
+            observer.runtime.engine.resolve(entity).layer is not None
+            and observer.runtime.engine.resolve(entity).layer.kind is LayerKind.MANUAL
+            and observer.runtime.engine.resolve(entity).layer.group_id == group_id
+            for entity in leaves
+        )
+
+        # Reproduce the live 2026-09-27 ordering: about half the leaves arrive in
+        # the first ordinary burst, the rest after the 2-second burst rolls over,
+        # and only then does the canonical aggregate finally report OFF.
+        first_wave = baseline + timedelta(seconds=3)
+        with patch(
+            "custom_components.home_lighting_manager.promotion_observer.dt_util.now",
+            return_value=first_wave,
+        ):
+            for leaf in leaves[:6]:
+                hass.states.async_set(leaf, "off", {"dynamics": "none"})
+                await hass.async_block_till_done()
+
+        second_wave = first_wave + timedelta(seconds=2.6)
+        with patch(
+            "custom_components.home_lighting_manager.promotion_observer.dt_util.now",
+            return_value=second_wave,
+        ):
+            for leaf in leaves[6:]:
+                hass.states.async_set(leaf, "off", {"dynamics": "none"})
+                await hass.async_block_till_done()
+            hass.states.async_set(unmanaged_extra, "off", {"dynamics": "none"})
+            await hass.async_block_till_done()
+
+        aggregate_off = second_wave + timedelta(seconds=0.4)
+        with patch(
+            "custom_components.home_lighting_manager.promotion_observer.dt_util.now",
+            return_value=aggregate_off,
+        ):
+            hass.states.async_set(
+                group_id,
+                "off",
+                {"entity_id": [*leaves, unmanaged_extra]},
+            )
+            await hass.async_block_till_done()
+
+        latest = observer.runtime.operations.latest_homeowner
+        assert latest is not None
+        assert latest["group_id"] == group_id
+        assert latest["reason"] == "released_to_hlm"
+        assert tuple(latest["affected"]) == tuple(sorted(leaves))
+        assert all(observer.runtime.engine.resolve(entity).layer is None for entity in leaves)
+        assert tuple(observer.runtime.engine.group_off_sequences()[group_id]) == tuple(
+            sorted(leaves)
+        )
+        attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
+        assert attrs["command_authority"] is False
+        assert unmanaged_extra not in attrs["reconciliation_protected_entities"]
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()

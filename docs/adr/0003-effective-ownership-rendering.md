@@ -100,6 +100,8 @@ ownership token into the same owner response used for verification. Manual-OFF i
 ON drift is no longer silently healthy. Manual appearance is protected from automatic comparison.
 Automatic eligibility remains underneath. A wholly protected scene does not require unrelated
 latest-scene metadata to be healthy. Unknown/unavailable remains an availability problem, never OFF.
+A new accepted first-group-OFF release schedules immediate verification even if the group had
+no prior protected exceptions; repeated diagnostic updates for that receipt do not reschedule it.
 Reconciliation remains bounded and subordinate to primary rendering, not an ON/OFF correction loop.
 
 Commissioning can inspect:

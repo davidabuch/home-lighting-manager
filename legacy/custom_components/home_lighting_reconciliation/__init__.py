@@ -331,7 +331,13 @@ class Adapter:
                     # the ordinary 30-second drift debounce. The repair path still
                     # re-resolves ownership and verifies the discrepancy before
                     # every guarded command.
-                    immediate = bool(old_protected - new_protected)
+                    latest = new.attributes.get("latest_homeowner_operation") or {}
+                    previous = old.attributes.get("latest_homeowner_operation") or {}
+                    released_group = (
+                        latest.get("reason") == "released_to_hlm"
+                        and latest.get("operation_id") != previous.get("operation_id")
+                    )
+                    immediate = bool(old_protected - new_protected) or released_group
             elif entity.endswith("_last_recall"):
                 surface = entity.removeprefix("sensor.").removesuffix("_last_recall")
                 guard = self.hass.states.get("input_boolean.home_lighting_ha_guard_" + surface)

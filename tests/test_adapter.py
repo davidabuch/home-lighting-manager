@@ -836,3 +836,27 @@ def test_scene_monitor_corroboration_fails_closed(
 
     assert result[scene]["latest"] is False
     assert "latest_corroborated_by" not in result[scene]
+
+
+@pytest.mark.asyncio
+async def test_first_group_off_without_previous_exceptions_reconciles_immediately(rig):
+    """A first OFF can release an all-automatic group with an empty protected set."""
+    adapter, _ = adapter_for(rig)
+    adapter.started = True
+    calls = []
+    adapter.runner.schedule = lambda reason, delay=None: calls.append((reason, delay))
+    entity = "sensor.home_lighting_manager_shadow_health"
+    attrs = {"command_authority": False, "reconciliation_protected_entities": [],
+             "effective_ownership": {"revision": 1}}
+    rig.set(entity, "observing", attrs)
+    await rig.hass.async_block_till_done()
+    unsub = rig.hass.bus.async_listen(EVENT_STATE_CHANGED, adapter.changed)
+    attrs = {**attrs, "effective_ownership": {"revision": 2},
+             "latest_homeowner_operation": {"operation_id": "group-first-off", "reason": "released_to_hlm"}}
+    rig.set(entity, "observing", attrs)
+    await rig.hass.async_block_till_done()
+    # Additional diagnostics for the same receipt must not restart immediate work.
+    rig.set(entity, "observing", {**attrs, "recent_evidence": ["telemetry"]})
+    await rig.hass.async_block_till_done()
+    unsub()
+    assert calls == [(entity, 0)]

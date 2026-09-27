@@ -215,6 +215,27 @@ async def test_changed_projection_during_hue_read_cancels_old_scene_plan(rig, bo
 
 
 @pytest.mark.asyncio
+async def test_diagnostic_revision_churn_does_not_abort_surface_off(rig):
+    runtime, members = setup(rig, "backyard")
+    rig.set("input_boolean.home_lighting_backyard_window", "off")
+    publish(rig, runtime, members)
+    churned = False
+
+    async def diagnostic_churn(call):
+        nonlocal churned
+        if call.domain == "light" and call.service == "turn_off" and not churned:
+            churned = True
+            runtime.engine.invalidate_work("guarded_physical_telemetry")
+            publish(rig, runtime, members)
+
+    rig.before_service = diagnostic_churn
+    await evaluate(rig, "backyard")
+    assert churned
+    assert all(rig.get(e).state == "off" for e in members)
+    assert rig.renderer.runner.diag["last_render"]["reason"] == "selective_light_command"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("surface", GROUPS)
 async def test_unavailable_is_not_off_and_not_replayed(rig, surface):
     runtime, members = setup(rig, surface)

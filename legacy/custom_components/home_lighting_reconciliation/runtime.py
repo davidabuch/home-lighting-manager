@@ -3,6 +3,18 @@
 import asyncio
 
 
+SCENE_EVIDENCE_PENDING = "different or unknown latest recall; possible Manual intent"
+
+
+def _retryable_evidence_gap(check):
+    """Return True only for bounded Hue latest-recall propagation lag."""
+    return (
+        bool(check.issues)
+        and not check.commands
+        and all(issue.get("error") == SCENE_EVIDENCE_PENDING for issue in check.issues)
+    )
+
+
 class Reconciler:
     """Adapter supplies live inspection and guarded commands; no captured owners."""
 
@@ -62,7 +74,9 @@ class Reconciler:
                 if not check.issues:
                     self.diag.update(health="repaired" if repaired else "healthy", last_error=None)
                     break
-                if attempt == 2 or not check.commands:
+                if attempt == 2 or (
+                    not check.commands and not _retryable_evidence_gap(check)
+                ):
                     self.diag.update(
                         health="degraded",
                         last_error="Unresolved discrepancies; bounded verification stopped",

@@ -1,6 +1,9 @@
+from datetime import timedelta
+
 import pytest
 
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 
 from custom_components.home_lighting_manager.engine import OwnershipEngine
 from custom_components.home_lighting_manager.ha_observer import (
@@ -110,5 +113,70 @@ async def test_canonical_membership_addition_is_live_and_exclusion_is_explicit(t
             (original, new_leaf)
         )
         assert diagnostic.attributes["managed_surface_exclusions"]["backyard"] == [excluded]
+    finally:
+        await observer.async_shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("surface", "group"),
+    (
+        ("main_area", "light.holiday_main_area"),
+        ("front_eve", "light.front_eve_zone"),
+        ("path", "light.holiday_path"),
+        ("backyard", "light.holiday_backyard"),
+    ),
+)
+async def test_every_canonical_surface_auto_adopts_new_members(tmp_path, surface, group):
+    original = f"light.{surface}_original"
+    added = f"light.{surface}_added"
+    hass = HomeAssistant(str(tmp_path))
+    hass.states.async_set(original, "on")
+    hass.states.async_set(added, "off")
+    hass.states.async_set(group, "on", {"entity_id": [original]})
+
+    observer = HomeAssistantShadowObserver(hass, [group, original], {})
+    await observer.async_start()
+    try:
+        assert added not in observer.entity_ids
+        hass.states.async_set(group, "on", {"entity_id": [original, added]})
+        observer._refresh_topology_cache()
+
+        assert added in observer.entity_ids
+        assert observer.runtime.engine.resolve(added).layer is None
+        diagnostic = hass.states.get(DIAGNOSTIC_ENTITY_ID)
+        assert diagnostic.attributes["managed_surface_members"][surface] == sorted(
+            (original, added)
+        )
+    finally:
+        await observer.async_shutdown()
+
+
+@pytest.mark.asyncio
+async def test_confirmed_surface_removal_retires_historical_static_member(tmp_path):
+    group = "light.holiday_backyard"
+    removed = "light.backyard_historical"
+    retained = "light.backyard_retained"
+    hass = HomeAssistant(str(tmp_path))
+    hass.states.async_set(removed, "on")
+    hass.states.async_set(retained, "on")
+    hass.states.async_set(group, "on", {"entity_id": [removed, retained]})
+
+    observer = HomeAssistantShadowObserver(hass, [group, removed], {})
+    await observer.async_start()
+    try:
+        assert removed in observer.entity_ids
+        assert retained in observer.entity_ids
+
+        hass.states.async_set(group, "on", {"entity_id": [retained]})
+        observer._pending_surface_membership[group] = (
+            (retained,),
+            dt_util.now() - timedelta(seconds=10),
+        )
+        observer._refresh_topology_cache()
+
+        assert removed not in observer.entity_ids
+        assert retained in observer.entity_ids
+        assert not observer.runtime.engine.accepts_entity(removed)
     finally:
         await observer.async_shutdown()

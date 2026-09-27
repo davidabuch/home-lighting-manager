@@ -604,3 +604,119 @@ async def test_post_boundary_off_epoch_blocks_delayed_contextless_rebound(tmp_pa
     finally:
         await observer.async_shutdown()
         await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_authoritative_main_area_scene_recall_promotes_exact_manual_scene_group(tmp_path):
+    """A newer raw Hue scene recall is stronger evidence than leaf rendering churn."""
+    from datetime import timedelta
+
+    from homeassistant.util import dt as dt_util
+
+    leaves = (
+        "light.kitchen_kitchen_left_cabinet_light",
+        "light.kitchen_kitchen_right_cabinet_lights",
+        "light.living_room_living_room_left_cabinets",
+        "light.living_room_living_room_right_cabinet_lights",
+        "light.living_room_left_ceiling_light",
+        "light.living_room_living_room_right_ceiling",
+        "light.living_room_liquor_cabinet_light",
+    )
+    aggregate = "light.holiday_main_area"
+    observer_entities = [*leaves, aggregate]
+    hass, observer = await observer_for(tmp_path, observer_entities)
+    try:
+        await seed_group(hass, aggregate, leaves, state="off")
+        hass.states.async_set("input_boolean.home_lighting_ha_guard_main_area", "off")
+        hass.states.async_set("binary_sensor.hue_bridge_living_room", "off")
+        await hass.async_block_till_done()
+
+        old = dt_util.now() - timedelta(minutes=5)
+        new = dt_util.now()
+        hass.states.async_set(
+            "sensor.main_area_last_recall",
+            old.isoformat(),
+            {
+                "scene_name": "49ers!",
+                "scene_id": "5228223d-532f-4bef-b266-0ceceb780819",
+            },
+        )
+        await hass.async_block_till_done()
+        hass.states.async_set(
+            "sensor.main_area_last_recall",
+            new.isoformat(),
+            {
+                "scene_name": "49ers!",
+                "scene_id": "5228223d-532f-4bef-b266-0ceceb780819",
+            },
+        )
+        await hass.async_block_till_done()
+
+        assert len(observer.runtime.operations.history) == 1
+        op = observer.runtime.operations.latest_homeowner
+        assert op is not None
+        assert op["group_id"] == aggregate
+        assert tuple(op["affected"]) == tuple(sorted(leaves))
+        for leaf in leaves:
+            layer = observer.runtime.engine.resolve(leaf).layer
+            assert layer is not None and layer.kind is LayerKind.MANUAL
+            assert layer.group_id == aggregate
+            assert layer.appearance.scene_id == "5228223d-532f-4bef-b266-0ceceb780819"
+            assert layer.appearance.scene_evidence is not None
+
+        attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
+        assert set(leaves).issubset(set(attrs["reconciliation_protected_entities"]))
+        assert attrs["command_authority"] is False
+
+        # Immediate scene-rendering churn must not replace scene identity with a leaf snapshot.
+        hass.states.async_set(leaves[0], "on", {"brightness": 180, "dynamics": "none"})
+        await hass.async_block_till_done()
+        hass.states.async_set(aggregate, "on", {"entity_id": list(leaves), "brightness": 180})
+        await hass.async_block_till_done()
+        assert observer.runtime.engine.resolve(leaves[0]).appearance.scene_id == (
+            "5228223d-532f-4bef-b266-0ceceb780819"
+        )
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_guarded_main_area_scene_recall_does_not_create_manual(tmp_path):
+    """Manager-owned Hue scene recalls remain automatic when the surface guard is active."""
+    from datetime import timedelta
+
+    from homeassistant.util import dt as dt_util
+
+    leaves = ("light.kitchen_kitchen_left_cabinet_light", "light.kitchen_kitchen_right_cabinet_lights")
+    aggregate = "light.holiday_main_area"
+    hass, observer = await observer_for(tmp_path, [*leaves, aggregate])
+    try:
+        await seed_group(hass, aggregate, leaves, state="off")
+        hass.states.async_set("input_boolean.home_lighting_ha_guard_main_area", "on")
+        hass.states.async_set("binary_sensor.hue_bridge_living_room", "off")
+        await hass.async_block_till_done()
+
+        old = dt_util.now() - timedelta(minutes=5)
+        new = dt_util.now()
+        hass.states.async_set(
+            "sensor.main_area_last_recall",
+            old.isoformat(),
+            {"scene_name": "49ers!", "scene_id": "scene-id"},
+        )
+        await hass.async_block_till_done()
+        hass.states.async_set(
+            "sensor.main_area_last_recall",
+            new.isoformat(),
+            {"scene_name": "49ers!", "scene_id": "scene-id"},
+        )
+        await hass.async_block_till_done()
+
+        assert not observer.runtime.operations.history
+        assert all(observer.runtime.engine.resolve(leaf).layer is None for leaf in leaves)
+        attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
+        assert not attrs["reconciliation_protected_entities"]
+        assert attrs["command_authority"] is False
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()

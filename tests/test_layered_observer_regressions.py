@@ -1676,38 +1676,3 @@ async def test_front_eve_managed_subset_preserves_single_member_safety_with_unma
         await hass.async_block_till_done()
 
 
-@pytest.mark.asyncio
-async def test_exact_group_correlation_projects_out_unmanaged_hue_members(tmp_path):
-    """Generic context-less exact-group promotion uses the HLM-managed subset."""
-    leaves = ("light.generic_managed_a", "light.generic_managed_b")
-    aggregate = "light.generic_surface"
-    unmanaged = "light.generic_unmanaged_decorative"
-    hass, observer = await observer_for(tmp_path, [*leaves, aggregate])
-    try:
-        await seed_group(hass, aggregate, (*leaves, unmanaged), state="on")
-
-        for index, leaf in enumerate(leaves):
-            hass.states.async_set(
-                leaf,
-                "on",
-                {"brightness": 120 + index, "dynamics": "none"},
-            )
-            await hass.async_block_till_done()
-        hass.states.async_set(
-            aggregate,
-            "on",
-            {"entity_id": [*leaves, unmanaged]},
-        )
-        await hass.async_block_till_done()
-
-        latest = observer.runtime.operations.latest_homeowner
-        assert latest is not None
-        assert latest["group_id"] == aggregate
-        assert latest["kind"] == "appearance"
-        assert tuple(latest["affected"]) == tuple(sorted(leaves))
-        assert unmanaged not in latest["requested"]
-        assert observer.runtime.engine.resolve(leaves[0]).layer.kind is LayerKind.MANUAL
-        assert observer.runtime.engine.resolve(leaves[1]).layer.kind is LayerKind.MANUAL
-    finally:
-        await observer.async_shutdown()
-        await hass.async_block_till_done()

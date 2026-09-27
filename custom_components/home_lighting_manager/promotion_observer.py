@@ -989,9 +989,23 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
                 if sync is None or sync.state != "off":
                     return reject("rejected_sync_not_off")
 
-        retained = self._retained_surface_off_members(armed_members)
-        if retained is None:
-            return reject("rejected_surface_off_evidence_incomplete")
+            # Commissioned canonical surfaces get the bounded slow-Hue path.
+            retained = self._retained_surface_off_members(armed_members)
+            if retained is None:
+                return reject("rejected_surface_off_evidence_incomplete")
+        else:
+            # Preserve the generic exact-group contract and its diagnostics.
+            leaf_entities = _string_tuple(burst.get("leaf_entities"))
+            if leaf_entities != armed_members:
+                return reject("rejected_burst_leaves_mismatch")
+            pending = tuple(
+                self._pending_external_leaves.get(entity_id) for entity_id in armed_members
+            )
+            if any(item is None for item in pending):
+                return reject("rejected_pending_member_missing")
+            retained = tuple(item for item in pending if item is not None)
+            if any(item.observation.operation != "off" for item in retained):
+                return reject("rejected_pending_operation_not_off")
 
         generations = {item.observation.generation for item in retained}
         if len(generations) != 1:

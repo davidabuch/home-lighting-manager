@@ -450,3 +450,41 @@ def test_diagnostics_cap_entities_layers_sessions_and_members():
     assert len(diagnostics["ownership_entities"][members[0]]["layers"]) == 8
     assert len(diagnostics["family_sessions"]) == 16
     assert len(diagnostics["latest_homeowner_operation"]["requested"]) == 32
+
+
+def test_reset_homeowner_control_clears_manual_state_but_preserves_automatic_layers():
+    runtime = setup()
+    runtime.observe_operation(operation(1))
+    runtime.observe_operation(operation(2, members=(B,), kind="off", appearance=None))
+    runtime.engine.start_family("49ers", "game-1", sequence=1)
+    runtime.engine.suppress_family("49ers", "game-1", "homeowner_override")
+    runtime.engine.apply_group_off("light.main", [A, B])
+
+    before_generation = runtime.engine.generation
+    result = runtime.reset_homeowner_control()
+
+    assert result["removed_homeowner_layers"] == 2
+    assert result["cleared_homeowner_suppressions"] == 1
+    assert result["cleared_group_off_sequences"] == 1
+    assert runtime.engine.generation == before_generation
+    assert runtime.engine.resolve(A).layer.owner == "daily"
+    assert runtime.engine.resolve(B).layer.owner == "daily"
+    session = runtime.engine.family_sessions()[0]
+    assert session.suppressed is False
+    assert session.suppression_reason is None
+    assert runtime.engine.group_off_sequences() == {}
+    assert runtime.engine.last_mutation_reason == "ownership_reset"
+    assert runtime.operations.latest_homeowner is None
+
+
+def test_reset_does_not_clear_non_homeowner_family_suppression():
+    runtime = setup()
+    runtime.engine.start_family("spa", "spa-1", sequence=1)
+    runtime.engine.suppress_family("spa", "spa-1", "safety_interlock")
+
+    result = runtime.reset_homeowner_control()
+
+    assert result["cleared_homeowner_suppressions"] == 0
+    session = runtime.engine.family_sessions()[0]
+    assert session.suppressed is True
+    assert session.suppression_reason == "safety_interlock"

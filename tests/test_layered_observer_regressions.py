@@ -922,10 +922,9 @@ async def test_authoritative_manual_scene_group_off_releases_despite_nested_aggr
         assert all(observer.runtime.engine.resolve(entity).layer is None for entity in leaves)
 
         attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
-        candidate = attrs["external_burst"]["external_intent_candidate"]
-        assert candidate["qualified"] is True
-        assert candidate["group_id"] == main
-        assert candidate["basis"] == "owned_manual_group_off_with_aggregate_propagation"
+        assert attrs["latest_homeowner_operation"]["group_id"] == main
+        assert attrs["latest_homeowner_operation"]["kind"] == "off"
+        assert attrs["latest_homeowner_operation"]["reason"] == "released_to_hlm"
         assert attrs["command_authority"] is False
     finally:
         await observer.async_shutdown()

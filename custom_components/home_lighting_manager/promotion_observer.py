@@ -989,9 +989,28 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
                 if sync is None or sync.state != "off":
                     return reject("rejected_sync_not_off")
 
-            # Commissioned canonical surfaces get the bounded slow-Hue path.
-            retained = self._retained_surface_off_members(armed_members)
-            if retained is None:
+            # Commissioned canonical surfaces get the bounded slow-Hue path,
+            # while preserving the established gate diagnostics.
+            pending = tuple(
+                self._pending_external_leaves.get(entity_id) for entity_id in armed_members
+            )
+            if any(item is None for item in pending):
+                return reject("rejected_pending_member_missing")
+            retained = tuple(item for item in pending if item is not None)
+            if any(item.observation.operation != "off" for item in retained):
+                return reject("rejected_pending_operation_not_off")
+            surface_generations = {
+                item.observation.generation for item in retained
+            }
+            if len(surface_generations) != 1:
+                return reject("rejected_pending_generations_mixed")
+            oldest = min(item.observed_at for item in retained)
+            newest = max(item.observed_at for item in retained)
+            surface_age = (newest - oldest).total_seconds()
+            if (
+                surface_age < 0
+                or surface_age > SURFACE_GROUP_OFF_CORRELATION_SECONDS
+            ):
                 return reject("rejected_surface_off_evidence_incomplete")
         else:
             # Preserve the generic exact-group contract and its diagnostics.

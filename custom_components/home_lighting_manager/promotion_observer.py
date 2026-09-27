@@ -326,6 +326,14 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
                 current_entity_id=observation.entity_id,
             )
             return
+        if self._promote_armed_group_off(
+            burst,
+            candidate,
+            observation=observation,
+            members=members,
+            current_entity_id=observation.entity_id,
+        ):
+            return
         if self._promote_owned_manual_group_off(
             burst,
             candidate,
@@ -610,6 +618,105 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         for key in stale_keys:
             cancel = self._pending_single_promotions.pop(key)
             cancel()
+
+    @callback
+    def _promote_armed_group_off(
+        self,
+        burst: dict[str, object],
+        candidate: dict[str, object],
+        *,
+        observation: ShadowObservation,
+        members: tuple[str, ...],
+        current_entity_id: str,
+    ) -> bool:
+        """Give an already-armed exact group priority over nested Hue aggregates."""
+        if observation.operation != "off" or not members:
+            return False
+
+        armed = self.runtime.engine.group_off_sequences().get(current_entity_id)
+        if armed is None:
+            return False
+
+        exact_members = tuple(sorted(set(members)))
+        armed_members = tuple(sorted(set(armed)))
+        leaf_entities = _string_tuple(burst.get("leaf_entities"))
+        if exact_members != armed_members or leaf_entities != armed_members:
+            return False
+
+        source = next(
+            (
+                value
+                for value in _SCENE_RECALL_SOURCES.values()
+                if value[0] == current_entity_id
+            ),
+            None,
+        )
+        if source is not None:
+            _, guard_id, sync_entity_id = source
+            guard = self.hass.states.get(guard_id)
+            if guard is None or guard.state != "off":
+                return False
+            if sync_entity_id is not None:
+                sync = self.hass.states.get(sync_entity_id)
+                if sync is None or sync.state != "off":
+                    return False
+
+        pending = tuple(
+            self._pending_external_leaves.get(entity_id) for entity_id in armed_members
+        )
+        if any(item is None for item in pending):
+            return False
+        retained = tuple(item for item in pending if item is not None)
+        if any(item.observation.operation != "off" for item in retained):
+            return False
+
+        generations = {item.observation.generation for item in retained}
+        if len(generations) != 1:
+            return False
+        generation = next(iter(generations))
+        if type(generation) is not int:
+            return False
+
+        sequence = min(int(item.observation.sequence) for item in retained)
+        self._cancel_pending_single_for_entities(armed_members)
+        for entity_id in armed_members:
+            self._pending_external_leaves.pop(entity_id, None)
+
+        candidate.update(
+            {
+                "qualified": True,
+                "entity_id": None,
+                "group_id": current_entity_id,
+                "basis": "armed_exact_group_second_off",
+            }
+        )
+        result = self.runtime.observe_operation(
+            HomeownerOperation(
+                operation_id=f"external-armed-group-off:{generation}:{sequence}",
+                sequence=sequence,
+                generation=generation,
+                kind="off",
+                evidence=_correlated_homeowner_evidence(),
+                members=tuple(
+                    MemberOutcome(
+                        item.observation.entity_id,
+                        manual_precedence=item.observation.manual_precedence,
+                    )
+                    for item in retained
+                ),
+                group_id=current_entity_id,
+                require_legacy_policy=False,
+            )
+        )
+        candidate.update(_promotion_outcome(result))
+
+        if result.mutated:
+            self._external_correlator.reset()
+            self._external_burst = None
+            self._external_group_burst_topology = {}
+            self._external_group_last_observed_at = None
+            self.hass.async_create_task(self.async_save())
+        return True
 
     @callback
     def _promote_owned_manual_group_off(

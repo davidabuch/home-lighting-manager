@@ -927,6 +927,136 @@ async def test_authoritative_manual_scene_group_off_releases_despite_nested_aggr
         assert attrs["latest_homeowner_operation"]["group_id"] == main
         assert attrs["latest_homeowner_operation"]["kind"] == "off"
         assert attrs["latest_homeowner_operation"]["reason"] == "released_to_hlm"
+        assert tuple(attrs["group_off_sequences"][main]) == tuple(sorted(leaves))
+        assert attrs["command_authority"] is False
+
+        # The underlying Daily layer is then rendered back ON by HA. This is not
+        # homeowner intent and must not disarm the already-armed Main Area OFF sequence.
+        daily_context = Context(parent_id="daily-render")
+        for entity in leaves:
+            hass.states.async_set(
+                entity,
+                "on",
+                {"brightness": 183, "dynamics": "none"},
+                context=daily_context,
+            )
+        for aggregate, aggregate_members in (
+            (main, leaves),
+            (celebration, (*leaves, "light.extra")),
+            (holiday_all, (*leaves, "light.extra_2")),
+            (
+                living,
+                (
+                    "light.living_room_living_room_left_cabinets",
+                    "light.living_room_living_room_right_cabinet_lights",
+                    "light.living_room_left_ceiling_light",
+                    "light.living_room_living_room_right_ceiling",
+                    "light.living_room_liquor_cabinet_light",
+                ),
+            ),
+            (
+                kitchen,
+                (
+                    "light.kitchen_kitchen_left_cabinet_light",
+                    "light.kitchen_kitchen_right_cabinet_lights",
+                    "light.extra_kitchen",
+                ),
+            ),
+            (
+                cabinets,
+                (
+                    "light.kitchen_kitchen_left_cabinet_light",
+                    "light.kitchen_kitchen_right_cabinet_lights",
+                ),
+            ),
+        ):
+            hass.states.async_set(
+                aggregate,
+                "on",
+                {"entity_id": list(aggregate_members)},
+                context=daily_context,
+            )
+        await hass.async_block_till_done()
+
+        second = later + timedelta(seconds=10)
+        with patch(
+            "custom_components.home_lighting_manager.promotion_observer.dt_util.now",
+            return_value=second,
+        ):
+            for entity in leaves:
+                hass.states.async_set(entity, "off", {"dynamics": "none"})
+                await hass.async_block_till_done()
+
+            # Match the live ordering that previously let the nested kitchen group
+            # steal the second OFF after the Main Area group had already been armed.
+            hass.states.async_set(
+                celebration,
+                "off",
+                {"entity_id": [*leaves, "light.extra"]},
+            )
+            await hass.async_block_till_done()
+            hass.states.async_set(
+                holiday_all,
+                "off",
+                {"entity_id": [*leaves, "light.extra_2"]},
+            )
+            await hass.async_block_till_done()
+            hass.states.async_set(main, "off", {"entity_id": list(leaves)})
+            await hass.async_block_till_done()
+            hass.states.async_set(
+                living,
+                "off",
+                {
+                    "entity_id": [
+                        "light.living_room_living_room_left_cabinets",
+                        "light.living_room_living_room_right_cabinet_lights",
+                        "light.living_room_left_ceiling_light",
+                        "light.living_room_living_room_right_ceiling",
+                        "light.living_room_liquor_cabinet_light",
+                    ]
+                },
+            )
+            await hass.async_block_till_done()
+            hass.states.async_set(
+                kitchen,
+                "off",
+                {
+                    "entity_id": [
+                        "light.kitchen_kitchen_left_cabinet_light",
+                        "light.kitchen_kitchen_right_cabinet_lights",
+                        "light.extra_kitchen",
+                    ]
+                },
+            )
+            await hass.async_block_till_done()
+            hass.states.async_set(
+                cabinets,
+                "off",
+                {
+                    "entity_id": [
+                        "light.kitchen_kitchen_left_cabinet_light",
+                        "light.kitchen_kitchen_right_cabinet_lights",
+                    ]
+                },
+            )
+            await hass.async_block_till_done()
+
+        latest = observer.runtime.operations.latest_homeowner
+        assert latest is not None
+        assert latest["group_id"] == main
+        assert latest["kind"] == "off"
+        assert latest["reason"] == "created_group_manual_off"
+        for entity in leaves:
+            layer = observer.runtime.engine.resolve(entity).layer
+            assert layer is not None
+            assert layer.kind is LayerKind.MANUAL_OFF
+            assert layer.group_id == main
+
+        attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
+        assert attrs["latest_homeowner_operation"]["group_id"] == main
+        assert attrs["latest_homeowner_operation"]["reason"] == "created_group_manual_off"
+        assert set(leaves).issubset(set(attrs["reconciliation_protected_entities"]))
+        assert "light.kitchen_cabinet_lights" not in attrs["group_off_sequences"]
         assert attrs["command_authority"] is False
     finally:
         await observer.async_shutdown()

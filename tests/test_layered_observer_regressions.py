@@ -1086,7 +1086,7 @@ async def test_observer_reset_clears_manual_off_and_starts_fresh_correlation_epo
         attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
         assert attrs["last_mutation_reason"] == "ownership_reset"
         assert attrs["command_authority"] is False
-        assert set(attrs["post_boundary_off_entities"]) == set(leaves)
+        assert set(attrs["post_boundary_off_entities"]) == set(observer.manual_precedence)
     finally:
         await observer.async_shutdown()
         await hass.async_block_till_done()

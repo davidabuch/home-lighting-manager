@@ -218,6 +218,8 @@ async def test_changed_projection_during_hue_read_cancels_old_scene_plan(rig, bo
 async def test_diagnostic_revision_churn_does_not_abort_surface_off(rig):
     runtime, members = setup(rig, "backyard")
     rig.set("input_boolean.home_lighting_backyard_window", "off")
+    for entity in members:
+        rig.set(entity, "on")
     publish(rig, runtime, members)
     churned = False
 

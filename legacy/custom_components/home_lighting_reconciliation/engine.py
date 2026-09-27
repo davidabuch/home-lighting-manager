@@ -106,11 +106,7 @@ def verify(owners, states, scripts, members, scene_info, suppressed=None):
     door = owners["liquor_cabinet"]["owner"] == "door"
     for surface in SURFACES:
         owner = owners[surface]["owner"]
-        manual_entities = (
-            set(owners["main_area"].get("manual_entities", []))
-            if surface == "main_area"
-            else set()
-        )
+        manual_entities = set(owners[surface].get("manual_entities", []))
         if surface in suppressed or owner in ("sync", "manual", "spa"):
             out.skipped[surface] = suppressed.get(surface, owner)
             # Manual has a functional liquor exception; Sync and transients do not.
@@ -139,7 +135,16 @@ def verify(owners, states, scripts, members, scene_info, suppressed=None):
                 if entity in manual_entities:
                     continue
                 if service == "scene.turn_on":
-                    _scene(out, surface, entity, states, scene_info, members[surface], door)
+                    _scene(
+                        out,
+                        surface,
+                        entity,
+                        states,
+                        scene_info,
+                        members[surface],
+                        door,
+                        protected=manual_entities,
+                    )
                 elif entity != LIQUOR or not door:
                     if entity not in members[surface]:
                         out.issues.append(
@@ -153,7 +158,7 @@ def verify(owners, states, scripts, members, scene_info, suppressed=None):
                         _static(out, surface, states, service, entity, data)
         elif owner in ("holiday", "49ers"):
             scene = owners[surface]["scene"]
-            protected = manual_entities if surface == "main_area" else set()
+            protected = manual_entities
             _scene(
                 out,
                 surface,

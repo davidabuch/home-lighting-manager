@@ -1066,9 +1066,30 @@ script:
   home_lighting_apply_path_state:
     alias: Home Lighting - Apply Driveway Path State
     description: |
-      Applies the authoritative Driveway Path owner. Automatic Manual ownership suppresses HA daily/off commands until the homeowner relinquishes control by turning the surface off.
+      Applies the authoritative Driveway Path owner while respecting HLM per-light and group Manual-OFF ownership. A full protected Path suppresses automatic rendering entirely; partial protection is re-applied after automatic rendering so only unprotected leaves follow the current automatic owner.
     mode: restart
     sequence:
+    - variables:
+        path_entities:
+          - light.front_yard_front_path_light_1
+          - light.front_yard_front_yard_path_light_2
+          - light.front_yard_front_yard_path_light_3
+          - light.front_yard_front_yard_path_light_4
+          - light.front_yard_front_yard_path_light_5
+          - light.front_yard_front_yard_path_light_6
+        hlm_protected_entities: >-
+          {{
+            state_attr(
+              'sensor.home_lighting_manager_shadow_health',
+              'reconciliation_protected_entities'
+            ) or []
+          }}
+        protected_path_entities: >-
+          {{
+            path_entities
+            | select('in', hlm_protected_entities)
+            | list
+          }}
     - action: script.home_lighting_resolve_owners
       response_variable: current
     - if:
@@ -1076,6 +1097,11 @@ script:
         value_template: '{{ current.path.owner == ''manual'' }}'
       then:
       - stop: Homeowner Manual owns Holiday Path.
+    - if:
+      - condition: template
+        value_template: '{{ protected_path_entities | count == path_entities | count }}'
+      then:
+      - stop: HLM Manual-OFF owns the full Driveway Path.
     - action: script.home_lighting_rearm_ha_guard
       data:
         guard_entity: input_boolean.home_lighting_ha_guard_path
@@ -1094,6 +1120,15 @@ script:
         - action: script.home_lighting_apply_path_baseline
       default:
       - action: script.home_lighting_path_off
+    - if:
+      - condition: template
+        value_template: '{{ protected_path_entities | count > 0 }}'
+      then:
+      - action: light.turn_off
+        target:
+          entity_id: '{{ protected_path_entities }}'
+        data:
+          transition: 0
 
   # ============================================================
   # BACKYARD DAILY BASELINE

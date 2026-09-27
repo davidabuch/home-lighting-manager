@@ -698,3 +698,60 @@ async def test_hlm_protection_addition_keeps_normal_reconciliation_debounce(rig)
     unsub()
 
     assert calls == [("sensor.home_lighting_manager_shadow_health", None)]
+
+
+@pytest.mark.asyncio
+async def test_hlm_path_manual_off_projection_blocks_daily_scene_repair(rig):
+    """A protected Path leaf is a valid Manual-OFF exception, not Daily drift."""
+
+    a, args = adapter_for(rig)
+    protected = args[3]["path"][0]
+
+    rig.set(
+        "sensor.home_lighting_manager_shadow_health",
+        "observing",
+        {
+            "command_authority": False,
+            "manual_precedence_entities": list(args[3]["path"]),
+            "reconciliation_protected_entities": [protected],
+        },
+    )
+    rig.set(protected, "off", {})
+
+    check, owners = await a.inspect()
+
+    assert protected in owners["path"]["manual_entities"]
+    assert not any(command.entity == protected for command in check.commands)
+    assert not any(
+        issue.get("entity") == protected and "difference" in issue
+        for issue in check.issues
+    )
+
+
+@pytest.mark.asyncio
+async def test_hlm_full_path_manual_off_is_healthy_daily_exception(rig):
+    """All six protected Path leaves may remain OFF while automatic owner stays Daily."""
+
+    a, args = adapter_for(rig)
+    protected = list(args[3]["path"])
+
+    rig.set(
+        "sensor.home_lighting_manager_shadow_health",
+        "observing",
+        {
+            "command_authority": False,
+            "manual_precedence_entities": protected,
+            "reconciliation_protected_entities": protected,
+        },
+    )
+    for entity in protected:
+        rig.set(entity, "off", {})
+
+    check, owners = await a.inspect()
+
+    assert set(owners["path"]["manual_entities"]) == set(protected)
+    assert not any(command.surface == "path" for command in check.commands)
+    assert not any(
+        issue.get("surface") == "path" and "difference" in issue
+        for issue in check.issues
+    )

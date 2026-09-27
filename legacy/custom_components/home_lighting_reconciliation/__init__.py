@@ -102,6 +102,24 @@ class Adapter:
             raise ValueError("Owner resolution failed")
         return result
 
+    def with_hlm_protection(self, owners, members):
+        """Project HLM per-leaf protection into every reconciled surface."""
+        diagnostic = self.hass.states.get(HLM_DIAGNOSTIC)
+        protected = set(
+            diagnostic.attributes.get("reconciliation_protected_entities") or ()
+        ) if diagnostic is not None else set()
+        projected = {
+            surface: dict(value)
+            for surface, value in owners.items()
+        }
+        for surface in SURFACES:
+            existing = set(projected[surface].get("manual_entities", ()))
+            group_members = set(members.get(surface, ()))
+            projected[surface]["manual_entities"] = sorted(
+                existing | (protected & group_members)
+            )
+        return projected
+
     async def inspect(self):
         owners = await self.owners()
         scripts = self.active_scripts()
@@ -127,9 +145,10 @@ class Adapter:
         members, metadata = await self.hue.read(scenes, active) if active else ({}, {})
         self.last_evidence = members, metadata
         self.known_members.update(entity for group in members.values() for entity in group)
+        owners = self.with_hlm_protection(owners, members)
         # Network waits can span a new ownership event. Resolve again and never use
         # old metadata for new owners; the generation loop also invalidates this pass.
-        current = await self.owners()
+        current = self.with_hlm_protection(await self.owners(), members)
         if current != owners:
             blocked = {s: "ownership changed during inspection" for s in SURFACES}
         else:
@@ -175,7 +194,7 @@ class Adapter:
             context=context,
         )
         # Final live checks after guard activation. No network IO here.
-        current = await self.owners()
+        current = self.with_hlm_protection(await self.owners(), members)
         if (
             not valid()
             or current != owners

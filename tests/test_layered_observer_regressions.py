@@ -720,3 +720,212 @@ async def test_guarded_main_area_scene_recall_does_not_create_manual(tmp_path):
     finally:
         await observer.async_shutdown()
         await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_authoritative_manual_scene_group_off_releases_despite_nested_aggregate_noise(tmp_path):
+    """Main Area first-OFF releases the owned Manual scene even with Hue aggregate fan-out."""
+    from datetime import timedelta
+
+    from homeassistant.util import dt as dt_util
+
+    leaves = (
+        "light.kitchen_kitchen_left_cabinet_light",
+        "light.kitchen_kitchen_right_cabinet_lights",
+        "light.living_room_living_room_left_cabinets",
+        "light.living_room_living_room_right_cabinet_lights",
+        "light.living_room_left_ceiling_light",
+        "light.living_room_living_room_right_ceiling",
+        "light.living_room_liquor_cabinet_light",
+    )
+    main = "light.holiday_main_area"
+    celebration = "light.celebration"
+    holiday_all = "light.holiday_lighting"
+    living = "light.living_room_living_room"
+    kitchen = "light.kitchen_kitchen"
+    cabinets = "light.kitchen_cabinet_lights"
+    observer_entities = [
+        *leaves,
+        main,
+        celebration,
+        holiday_all,
+        living,
+        kitchen,
+        cabinets,
+    ]
+    hass, observer = await observer_for(tmp_path, observer_entities)
+    try:
+        await seed_group(hass, main, leaves, state="off")
+        await seed_group(hass, celebration, (*leaves, "light.extra"), state="off")
+        await seed_group(hass, holiday_all, (*leaves, "light.extra_2"), state="off")
+        await seed_group(
+            hass,
+            living,
+            (
+                "light.living_room_living_room_left_cabinets",
+                "light.living_room_living_room_right_cabinet_lights",
+                "light.living_room_left_ceiling_light",
+                "light.living_room_living_room_right_ceiling",
+                "light.living_room_liquor_cabinet_light",
+            ),
+            state="off",
+        )
+        await seed_group(
+            hass,
+            kitchen,
+            (
+                "light.kitchen_kitchen_left_cabinet_light",
+                "light.kitchen_kitchen_right_cabinet_lights",
+                "light.extra_kitchen",
+            ),
+            state="off",
+        )
+        await seed_group(
+            hass,
+            cabinets,
+            (
+                "light.kitchen_kitchen_left_cabinet_light",
+                "light.kitchen_kitchen_right_cabinet_lights",
+            ),
+            state="off",
+        )
+        hass.states.async_set("input_boolean.home_lighting_ha_guard_main_area", "off")
+        hass.states.async_set("binary_sensor.hue_bridge_living_room", "off")
+        await hass.async_block_till_done()
+
+        old = dt_util.now() - timedelta(minutes=5)
+        recalled = dt_util.now()
+        hass.states.async_set(
+            "sensor.main_area_last_recall",
+            old.isoformat(),
+            {"scene_name": "49ers!", "scene_id": "scene-49ers"},
+        )
+        await hass.async_block_till_done()
+        hass.states.async_set(
+            "sensor.main_area_last_recall",
+            recalled.isoformat(),
+            {"scene_name": "49ers!", "scene_id": "scene-49ers"},
+        )
+        await hass.async_block_till_done()
+
+        assert all(
+            observer.runtime.engine.resolve(entity).layer is not None
+            and observer.runtime.engine.resolve(entity).layer.kind is LayerKind.MANUAL
+            for entity in leaves
+        )
+
+        # Scene rendering has made these aggregates physically ON before the homeowner
+        # later turns the zone OFF. Parent context keeps this setup from becoming
+        # homeowner ingress on its own.
+        render_context = Context(parent_id="scene-render")
+        for aggregate, aggregate_members in (
+            (main, leaves),
+            (celebration, (*leaves, "light.extra")),
+            (holiday_all, (*leaves, "light.extra_2")),
+            (
+                living,
+                (
+                    "light.living_room_living_room_left_cabinets",
+                    "light.living_room_living_room_right_cabinet_lights",
+                    "light.living_room_left_ceiling_light",
+                    "light.living_room_living_room_right_ceiling",
+                    "light.living_room_liquor_cabinet_light",
+                ),
+            ),
+            (
+                kitchen,
+                (
+                    "light.kitchen_kitchen_left_cabinet_light",
+                    "light.kitchen_kitchen_right_cabinet_lights",
+                    "light.extra_kitchen",
+                ),
+            ),
+            (
+                cabinets,
+                (
+                    "light.kitchen_kitchen_left_cabinet_light",
+                    "light.kitchen_kitchen_right_cabinet_lights",
+                ),
+            ),
+        ):
+            hass.states.async_set(
+                aggregate,
+                "on",
+                {"entity_id": list(aggregate_members)},
+                context=render_context,
+            )
+        await hass.async_block_till_done()
+
+        later = recalled + timedelta(seconds=3)
+        with patch(
+            "custom_components.home_lighting_manager.promotion_observer.dt_util.now",
+            return_value=later,
+        ):
+            for entity in leaves:
+                hass.states.async_set(entity, "off")
+                await hass.async_block_till_done()
+
+            # Hue fans the same physical group OFF through several nested aggregates.
+            hass.states.async_set(celebration, "off", {"entity_id": [*leaves, "light.extra"]})
+            await hass.async_block_till_done()
+            hass.states.async_set(holiday_all, "off", {"entity_id": [*leaves, "light.extra_2"]})
+            await hass.async_block_till_done()
+            hass.states.async_set(
+                living,
+                "off",
+                {
+                    "entity_id": [
+                        "light.living_room_living_room_left_cabinets",
+                        "light.living_room_living_room_right_cabinet_lights",
+                        "light.living_room_left_ceiling_light",
+                        "light.living_room_living_room_right_ceiling",
+                        "light.living_room_liquor_cabinet_light",
+                    ]
+                },
+            )
+            await hass.async_block_till_done()
+            hass.states.async_set(
+                main,
+                "off",
+                {"entity_id": list(leaves)},
+            )
+            await hass.async_block_till_done()
+            hass.states.async_set(
+                kitchen,
+                "off",
+                {
+                    "entity_id": [
+                        "light.kitchen_kitchen_left_cabinet_light",
+                        "light.kitchen_kitchen_right_cabinet_lights",
+                        "light.extra_kitchen",
+                    ]
+                },
+            )
+            await hass.async_block_till_done()
+            hass.states.async_set(
+                cabinets,
+                "off",
+                {
+                    "entity_id": [
+                        "light.kitchen_kitchen_left_cabinet_light",
+                        "light.kitchen_kitchen_right_cabinet_lights",
+                    ]
+                },
+            )
+            await hass.async_block_till_done()
+
+        latest = observer.runtime.operations.latest_homeowner
+        assert latest is not None
+        assert latest["group_id"] == main
+        assert latest["kind"] == "off"
+        assert latest["reason"] == "released_to_hlm"
+        assert all(observer.runtime.engine.resolve(entity).layer is None for entity in leaves)
+
+        attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
+        assert attrs["latest_homeowner_operation"]["group_id"] == main
+        assert attrs["latest_homeowner_operation"]["kind"] == "off"
+        assert attrs["latest_homeowner_operation"]["reason"] == "released_to_hlm"
+        assert attrs["command_authority"] is False
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()

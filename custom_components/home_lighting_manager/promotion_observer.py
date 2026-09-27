@@ -326,6 +326,14 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
                 current_entity_id=observation.entity_id,
             )
             return
+        if self._promote_owned_manual_group_off(
+            burst,
+            candidate,
+            observation=observation,
+            members=members,
+            current_entity_id=observation.entity_id,
+        ):
+            return
         self._promote_exact_group_candidate(
             burst,
             candidate,
@@ -598,6 +606,112 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         for key in stale_keys:
             cancel = self._pending_single_promotions.pop(key)
             cancel()
+
+    @callback
+    def _promote_owned_manual_group_off(
+        self,
+        burst: dict[str, object],
+        candidate: dict[str, object],
+        *,
+        observation: ShadowObservation,
+        members: tuple[str, ...],
+        current_entity_id: str,
+    ) -> bool:
+        """Release one already-known Manual scene group despite nested Hue aggregate noise."""
+        if observation.operation != "off" or not members:
+            return False
+        if current_entity_id not in {
+            value[0] for value in _SCENE_RECALL_SOURCES.values()
+        }:
+            return False
+
+        source = next(
+            (
+                value
+                for value in _SCENE_RECALL_SOURCES.values()
+                if value[0] == current_entity_id
+            ),
+            None,
+        )
+        if source is None:
+            return False
+        _, guard_id, sync_entity_id = source
+        guard = self.hass.states.get(guard_id)
+        if guard is None or guard.state != "off":
+            return False
+        if sync_entity_id is not None:
+            sync = self.hass.states.get(sync_entity_id)
+            if sync is None or sync.state != "off":
+                return False
+
+        leaf_entities = _string_tuple(burst.get("leaf_entities"))
+        exact_members = tuple(sorted(set(members)))
+        if leaf_entities != exact_members:
+            return False
+
+        exposed_layers = tuple(
+            self.runtime.engine.resolve(entity_id).layer for entity_id in exact_members
+        )
+        if any(layer is None for layer in exposed_layers):
+            return False
+        if any(
+            layer.kind.value != "manual"
+            or layer.group_id != current_entity_id
+            for layer in exposed_layers
+            if layer is not None
+        ):
+            return False
+
+        pending = tuple(
+            self._pending_external_leaves.get(entity_id) for entity_id in exact_members
+        )
+        if any(item is None for item in pending):
+            return False
+        retained = tuple(item for item in pending if item is not None)
+        if any(item.observation.operation != "off" for item in retained):
+            return False
+
+        sequences = [item.observation.sequence for item in retained]
+        generations = {item.observation.generation for item in retained}
+        if any(type(sequence) is not int for sequence in sequences) or len(generations) != 1:
+            return False
+        generation = next(iter(generations))
+        if type(generation) is not int:
+            return False
+
+        sequence = min(int(item.observation.sequence) for item in retained)
+        self._cancel_pending_single_for_entities(exact_members)
+        candidate.update(
+            {
+                "qualified": True,
+                "entity_id": None,
+                "group_id": current_entity_id,
+                "basis": "owned_manual_group_off_with_aggregate_propagation",
+            }
+        )
+        result = self.runtime.observe_operation(
+            HomeownerOperation(
+                operation_id=f"external-owned-group-off:{generation}:{sequence}",
+                sequence=sequence,
+                generation=generation,
+                kind="off",
+                evidence=_correlated_homeowner_evidence(),
+                members=tuple(
+                    MemberOutcome(
+                        item.observation.entity_id,
+                        manual_precedence=item.observation.manual_precedence,
+                    )
+                    for item in retained
+                ),
+                group_id=current_entity_id,
+                require_legacy_policy=False,
+            )
+        )
+        outcome = _promotion_outcome(result)
+        candidate.update(outcome)
+        if result.mutated:
+            self.hass.async_create_task(self.async_save())
+        return True
 
     @callback
     def _promote_exact_group_candidate(

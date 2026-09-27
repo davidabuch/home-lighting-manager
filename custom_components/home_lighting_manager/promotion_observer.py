@@ -32,7 +32,7 @@ from .intent_policy import (
     IntentEvidence,
     IntentEvidenceKind,
 )
-from .model import Appearance
+from .model import Appearance, LayerKind
 from .operations import HomeownerOperation, MemberOutcome, OperationResult
 from .shadow import ShadowDecision, ShadowObservation
 
@@ -79,6 +79,7 @@ _CONTEXTLESS_SINGLE_MEMBER_SURFACES = frozenset({"light.front_eve_zone"})
 # status.last_recall unchanged. Keep this separate from the ordinary 2-second
 # external-command burst so broad ambiguity does not become easier to promote.
 SCENE_DISPLACEMENT_CORROBORATION_SECONDS = 8.0
+SURFACE_GROUP_OFF_CORRELATION_SECONDS = 8.0
 
 
 @dataclass(frozen=True)
@@ -637,6 +638,53 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         }
 
     @callback
+    def _surface_group_off_hold_seconds(self, entity_id: str, operation: str) -> float:
+        """Return the bounded hold only for Manual-owned or armed canonical surface OFFs."""
+        if operation != "off":
+            return EXTERNAL_BURST_WINDOW_SECONDS
+        armed_groups = self.runtime.engine.group_off_sequences()
+        for aggregate_id, _guard_id in _SURFACE_GUARDS:
+            managed = self._managed_group_members(
+                self._topology_members.get(aggregate_id, ())
+            )
+            if entity_id not in managed:
+                continue
+            armed = tuple(sorted(set(armed_groups.get(aggregate_id, ()))))
+            if armed and armed == managed:
+                return SURFACE_GROUP_OFF_CORRELATION_SECONDS
+            if managed:
+                layers = tuple(self.runtime.engine.resolve(member).layer for member in managed)
+                if all(
+                    layer is not None
+                    and layer.kind is LayerKind.MANUAL
+                    and layer.group_id == aggregate_id
+                    for layer in layers
+                ):
+                    return SURFACE_GROUP_OFF_CORRELATION_SECONDS
+        return EXTERNAL_BURST_WINDOW_SECONDS
+
+    @callback
+    def _retained_surface_off_members(
+        self, members: tuple[str, ...]
+    ) -> tuple[_PendingExternalLeaf, ...] | None:
+        """Return one coherent exact managed OFF set independent of ordinary burst rollover."""
+        pending = tuple(self._pending_external_leaves.get(entity_id) for entity_id in members)
+        if any(item is None for item in pending):
+            return None
+        retained = tuple(item for item in pending if item is not None)
+        if any(item.observation.operation != "off" for item in retained):
+            return None
+        generations = {item.observation.generation for item in retained}
+        if len(generations) != 1:
+            return None
+        oldest = min(item.observed_at for item in retained)
+        newest = max(item.observed_at for item in retained)
+        age = (newest - oldest).total_seconds()
+        if age < 0 or age > SURFACE_GROUP_OFF_CORRELATION_SECONDS:
+            return None
+        return retained
+
+    @callback
     def _promote_single_candidate(
         self,
         candidate: dict[str, object],
@@ -763,9 +811,12 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             current_key = (current.observation.sequence, entity_id)
             self._apply_single_promotion(latest_candidate, current_key, current)
 
+        hold_seconds = self._surface_group_off_hold_seconds(
+            entity_id, pending.observation.operation
+        )
         self._pending_single_promotions[promotion_key] = async_call_later(
             self.hass,
-            EXTERNAL_BURST_WINDOW_SECONDS,
+            hold_seconds,
             _finalize,
         )
         candidate.update(
@@ -917,11 +968,8 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
 
         exact_members = self._managed_group_members(members)
         armed_members = tuple(sorted(set(armed)))
-        leaf_entities = _string_tuple(burst.get("leaf_entities"))
         if exact_members != armed_members:
             return reject("rejected_aggregate_members_mismatch")
-        if leaf_entities != armed_members:
-            return reject("rejected_burst_leaves_mismatch")
 
         source = next(
             (
@@ -941,14 +989,9 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
                 if sync is None or sync.state != "off":
                     return reject("rejected_sync_not_off")
 
-        pending = tuple(
-            self._pending_external_leaves.get(entity_id) for entity_id in armed_members
-        )
-        if any(item is None for item in pending):
-            return reject("rejected_pending_member_missing")
-        retained = tuple(item for item in pending if item is not None)
-        if any(item.observation.operation != "off" for item in retained):
-            return reject("rejected_pending_operation_not_off")
+        retained = self._retained_surface_off_members(armed_members)
+        if retained is None:
+            return reject("rejected_surface_off_evidence_incomplete")
 
         generations = {item.observation.generation for item in retained}
         if len(generations) != 1:
@@ -1038,10 +1081,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             if sync is None or sync.state != "off":
                 return False
 
-        leaf_entities = _string_tuple(burst.get("leaf_entities"))
         exact_members = self._managed_group_members(members)
-        if leaf_entities != exact_members:
-            return False
 
         exposed_layers = tuple(
             self.runtime.engine.resolve(entity_id).layer for entity_id in exact_members
@@ -1056,13 +1096,8 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         ):
             return False
 
-        pending = tuple(
-            self._pending_external_leaves.get(entity_id) for entity_id in exact_members
-        )
-        if any(item is None for item in pending):
-            return False
-        retained = tuple(item for item in pending if item is not None)
-        if any(item.observation.operation != "off" for item in retained):
+        retained = self._retained_surface_off_members(exact_members)
+        if retained is None:
             return False
 
         sequences = [item.observation.sequence for item in retained]
@@ -1541,12 +1576,14 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
     @callback
     def _prune_pending_external_leaves(self, now: datetime) -> None:
         """Bound retained leaf evidence to the same short window as burst correlation."""
-        stale = [
-            entity_id
-            for entity_id, pending in self._pending_external_leaves.items()
-            if (now - pending.observed_at).total_seconds() > EXTERNAL_BURST_WINDOW_SECONDS
-            or (now - pending.observed_at).total_seconds() < 0
-        ]
+        stale = []
+        for entity_id, pending in self._pending_external_leaves.items():
+            age = (now - pending.observed_at).total_seconds()
+            hold_seconds = self._surface_group_off_hold_seconds(
+                entity_id, pending.observation.operation
+            )
+            if age > hold_seconds or age < 0:
+                stale.append(entity_id)
         for entity_id in stale:
             item = self._pending_external_leaves[entity_id]
             self._off_leaf_evidence.append({

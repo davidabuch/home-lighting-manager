@@ -386,9 +386,7 @@ class HomeAssistantShadowObserver:
             ),
             "manual_precedence_entities": sorted(self.manual_precedence),
             "reconciliation_protected_entities": list(
-                self.runtime.reconciliation_protected_entities(
-                    set(self.manual_precedence)
-                )
+                self.runtime.reconciliation_protected_entities()
             ),
             "storage_status": self._storage_status,
             "command_authority": False,

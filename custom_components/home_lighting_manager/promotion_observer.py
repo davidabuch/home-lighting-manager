@@ -7,7 +7,9 @@ calls Home Assistant services or commands a light.
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -89,6 +91,8 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         manual_precedence: dict[str, int] | None = None,
     ) -> None:
         super().__init__(hass, entity_ids, manual_precedence)
+        self._armed_off_attempts: deque[dict] = deque(maxlen=32)
+        self._off_leaf_evidence: deque[dict] = deque(maxlen=64)
         self._pending_external_leaves: dict[str, _PendingExternalLeaf] = {}
         self._pending_single_promotions: dict[
             tuple[int | None, str], Callable[[], None]
@@ -265,12 +269,21 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             observation.evidence.kind is IntentEvidenceKind.AVAILABILITY_CHANGE
             or observation.evidence.has_parent_id
         ):
+            self._off_leaf_evidence.append({
+                "timestamp": dt_util.now().isoformat(), "entity_id": observation.entity_id,
+                "operation": observation.operation, "sequence": observation.sequence,
+                "generation": observation.generation,
+                "result": "invalidated_availability_or_parent_context",
+            })
             self._pending_external_leaves.pop(observation.entity_id, None)
             self._cancel_pending_single_for_entities((observation.entity_id,))
         if (
             observation.evidence.attribution_source
             is not IntentAttributionSource.UNATTRIBUTED_EXTERNAL
         ):
+            self._trace_armed_off(self._external_burst or {}, {}, observation,
+                                  self._member_entity_ids_for_event(observation.entity_id, new_state),
+                                  "routing", "excluded_attribution_source")
             super()._record_external_topology(observation, new_state)
             return
 
@@ -309,17 +322,33 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
                 observation=observation,
                 state=new_state,
             )
+        if not members:
+            self._off_leaf_evidence.append({
+                "timestamp": observed_at.isoformat(), "entity_id": observation.entity_id,
+                "operation": observation.operation, "sequence": observation.sequence,
+                "generation": observation.generation,
+                "result": automatic_reason or (
+                    "retained" if observation.entity_id in self._pending_external_leaves
+                    else "not_retained_evidence_kind"
+                ),
+                "evidence_kind": observation.evidence.kind.value,
+                "has_parent_id": observation.evidence.has_parent_id,
+            })
         self._prune_pending_external_leaves(observed_at)
 
         super()._record_external_topology(observation, new_state)
         burst = self._external_burst
         if not isinstance(burst, dict):
+            self._trace_armed_off({}, {}, observation, members, "routing", "missing_burst")
             return
 
         candidate = burst.get("external_intent_candidate")
         if not isinstance(candidate, dict):
+            self._trace_armed_off(burst, {}, observation, members, "routing", "missing_candidate")
             return
         if candidate.get("qualified") is True:
+            self._trace_armed_off(burst, candidate, observation, members,
+                                  "routing", "bypassed_qualified_single_candidate")
             self._promote_single_candidate(
                 candidate,
                 members,
@@ -620,6 +649,66 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             cancel()
 
     @callback
+    def _trace_armed_off(self, burst, candidate, observation, members, stage, result) -> None:
+        """Capture gate inputs without refreshing topology, mutating evidence or taking authority."""
+        armed = self.runtime.engine.group_off_sequences()
+        if not members and observation.entity_id not in armed:
+            return
+        group = observation.entity_id
+        requested = armed.get(group, ())
+        source = next((v for v in _SCENE_RECALL_SOURCES.values() if v[0] == group), None)
+        def state(entity):
+            current = self.hass.states.get(entity) if entity else None
+            return current.state if current else None
+        pending = {}
+        for entity in tuple(sorted(set(requested) | set(members)))[:32]:
+            item = self._pending_external_leaves.get(entity)
+            pending[entity] = None if item is None else {
+                "operation": item.observation.operation,
+                "sequence": item.observation.sequence,
+                "generation": item.observation.generation,
+                "observed_at": item.observed_at.isoformat(),
+            }
+        self._armed_off_attempts.append({
+            "timestamp": dt_util.now().isoformat(), "aggregate_entity": group,
+            "operation": observation.operation, "group_id": group,
+            "sequence": observation.sequence, "generation": observation.generation,
+            "runtime_generation": self.runtime.engine.generation,
+            "runtime_revision": self.runtime.engine.revision,
+            "stage": stage, "result": result,
+            "armed_group_ids": tuple(armed)[:16], "armed_group_count": len(armed),
+            "armed_members": requested[:32], "armed_member_count": len(requested),
+            "aggregate_members": members[:32], "aggregate_member_count": len(members),
+            "burst_leaf_members": tuple(burst.get("leaf_entities", ()))[:32],
+            "burst_aggregate_members": tuple(burst.get("aggregate_entities", ()))[:32],
+            "burst_started_at": burst.get("started_at"),
+            "burst_updated_at": burst.get("updated_at"),
+            "burst_topology": burst.get("topology"),
+            "snapshot_members": self._external_group_burst_topology.get(group, ())[:32],
+            "current_cache_members": self._topology_members.get(group, ())[:32],
+            "pending_leaf_ids": tuple(sorted(self._pending_external_leaves))[:32],
+            "pending_leaf_count": len(self._pending_external_leaves), "pending_members": pending,
+            "pending_single_keys": tuple(self._pending_single_promotions)[:32],
+            "guard_state": state(source[1]) if source else "not_configured",
+            "sync_state": state(source[2]) if source else "not_configured",
+            "canonical_aggregate_state": state(group),
+            "candidate_qualified": candidate.get("qualified"),
+            "candidate_basis": candidate.get("basis"),
+            "candidate_entity": candidate.get("entity_id"),
+            "candidate_group": candidate.get("group_id"),
+            "attribution_source": observation.evidence.attribution_source.value,
+            "has_user_id": observation.evidence.has_user_id,
+            "has_parent_id": observation.evidence.has_parent_id,
+            "latest_removal_serial": (self.runtime.engine.group_off_changes() or [{}])[-1].get("serial"),
+        })
+
+    def off_attempt_diagnostics(self) -> dict:
+        return {
+            "armed_group_off_attempts": deepcopy(list(self._armed_off_attempts)),
+            "off_leaf_evidence": deepcopy(list(self._off_leaf_evidence)),
+        }
+
+    @callback
     def _promote_armed_group_off(
         self,
         burst: dict[str, object],
@@ -630,18 +719,26 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         current_entity_id: str,
     ) -> bool:
         """Give an already-armed exact group priority over nested Hue aggregates."""
-        if observation.operation != "off" or not members:
+        def reject(reason):
+            self._trace_armed_off(burst, candidate, observation, members, "armed", reason)
             return False
+
+        if observation.operation != "off":
+            return reject("rejected_not_off")
+        if not members:
+            return reject("rejected_no_aggregate_members")
 
         armed = self.runtime.engine.group_off_sequences().get(current_entity_id)
         if armed is None:
-            return False
+            return reject("rejected_group_not_armed")
 
         exact_members = tuple(sorted(set(members)))
         armed_members = tuple(sorted(set(armed)))
         leaf_entities = _string_tuple(burst.get("leaf_entities"))
-        if exact_members != armed_members or leaf_entities != armed_members:
-            return False
+        if exact_members != armed_members:
+            return reject("rejected_aggregate_members_mismatch")
+        if leaf_entities != armed_members:
+            return reject("rejected_burst_leaves_mismatch")
 
         source = next(
             (
@@ -655,28 +752,29 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             _, guard_id, sync_entity_id = source
             guard = self.hass.states.get(guard_id)
             if guard is None or guard.state != "off":
-                return False
+                return reject("rejected_guard_not_off")
             if sync_entity_id is not None:
                 sync = self.hass.states.get(sync_entity_id)
                 if sync is None or sync.state != "off":
-                    return False
+                    return reject("rejected_sync_not_off")
 
         pending = tuple(
             self._pending_external_leaves.get(entity_id) for entity_id in armed_members
         )
         if any(item is None for item in pending):
-            return False
+            return reject("rejected_pending_member_missing")
         retained = tuple(item for item in pending if item is not None)
         if any(item.observation.operation != "off" for item in retained):
-            return False
+            return reject("rejected_pending_operation_not_off")
 
         generations = {item.observation.generation for item in retained}
         if len(generations) != 1:
-            return False
+            return reject("rejected_pending_generations_mixed")
         generation = next(iter(generations))
         if type(generation) is not int:
-            return False
+            return reject("rejected_pending_generation_invalid")
 
+        self._trace_armed_off(burst, candidate, observation, members, "armed", "submitting_to_core")
         sequence = min(int(item.observation.sequence) for item in retained)
         self._cancel_pending_single_for_entities(armed_members)
         for entity_id in armed_members:
@@ -709,6 +807,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             )
         )
         candidate.update(_promotion_outcome(result))
+        self._trace_armed_off(burst, candidate, observation, members, "core_result", result.reason)
 
         if result.mutated:
             self._external_correlator.reset()
@@ -1005,6 +1104,15 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             or (now - pending.observed_at).total_seconds() < 0
         ]
         for entity_id in stale:
+            item = self._pending_external_leaves[entity_id]
+            self._off_leaf_evidence.append({
+                "timestamp": now.isoformat(), "entity_id": entity_id,
+                "operation": item.observation.operation,
+                "sequence": item.observation.sequence,
+                "generation": item.observation.generation,
+                "result": "pruned_correlation_window",
+                "age_seconds": (now - item.observed_at).total_seconds(),
+            })
             self._pending_external_leaves.pop(entity_id, None)
             self._cancel_pending_single_for_entities((entity_id,))
 

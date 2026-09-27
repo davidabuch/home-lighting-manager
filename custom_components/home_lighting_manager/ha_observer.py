@@ -355,6 +355,10 @@ class HomeAssistantShadowObserver:
     async def _async_stop_event(self, _event: Event) -> None:
         await self.async_save()
 
+    def off_attempt_diagnostics(self) -> dict:
+        """Optional read-only commissioning evidence supplied by the promotion adapter."""
+        return {}
+
     @callback
     def _publish_diagnostics(self) -> None:
         diagnostics = self.runtime.diagnostics()
@@ -397,6 +401,7 @@ class HomeAssistantShadowObserver:
             "topology_cache_ready": bool(self._topology_members),
         }
         attrs.update(self.runtime.ownership_diagnostics())
+        attrs.update(self.off_attempt_diagnostics())
         if self._last_decision is not None:
             attrs.update(
                 {

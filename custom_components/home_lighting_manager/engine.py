@@ -6,7 +6,7 @@ persist state, or call services.
 
 from __future__ import annotations
 
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from copy import deepcopy
 from dataclasses import replace
 from uuid import uuid4
@@ -41,6 +41,8 @@ class OwnershipEngine:
         self._layers: dict[str, list[OwnershipLayer]] = {}
         self._families: dict[tuple[str, str], FamilySession] = {}
         self._group_off_armed: dict[str, frozenset[str]] = {}
+        self._group_off_changes: deque[dict] = deque(maxlen=32)
+        self._group_off_change_serial = 0
         self._order = 0
         self.revision = 0
         self.last_mutation_reason = "initialized"
@@ -59,7 +61,7 @@ class OwnershipEngine:
         self._session_ids.clear()
         self._legacy_sessions_exhausted = False
         self._changed("configuration_generation_changed")
-        self._group_off_armed.clear()
+        self._clear_group_off("next_generation")
         return self.generation
 
     def is_current_generation(self, generation: int) -> bool:
@@ -199,7 +201,7 @@ class OwnershipEngine:
                 self._layers[entity_id] = remaining
             else:
                 self._layers.pop(entity_id, None)
-        self._group_off_armed.clear()
+        self._clear_group_off(f"expire_boundary:{boundary}")
         self._changed(f"boundary:{boundary}")
 
     def resolve(self, entity_id: str) -> ResolvedEntity:
@@ -387,7 +389,7 @@ class OwnershipEngine:
         # An overlapping group's newer operation invalidates its earlier two-OFF sequence.
         for other, targets in list(self._group_off_armed.items()):
             if other != group_id and targets & member_set:
-                self._group_off_armed.pop(other)
+                self._discard_group_off(other, "apply_group_off:overlap", group_id)
         if self._group_off_armed.get(group_id) == member_set:
             exposed = [self.resolve(entity_id).layer for entity_id in sorted(eligible)]
             for layer in exposed:
@@ -410,7 +412,7 @@ class OwnershipEngine:
                     continue
                 self.remove_homeowner_exceptions(entity_id)
             if group_id not in self._group_off_armed and len(self._group_off_armed) >= MAX_GROUPS:
-                self._group_off_armed.pop(next(iter(self._group_off_armed)))
+                self._discard_group_off(next(iter(self._group_off_armed)), "apply_group_off:capacity", group_id)
             self._group_off_armed[group_id] = member_set
             action = GroupOffAction.RELEASED_TO_HLM
 
@@ -426,9 +428,9 @@ class OwnershipEngine:
         if self._group_off_armed:
             self._changed("group_off_sequence_reset")
         if group_id is None:
-            self._group_off_armed.clear()
+            self._clear_group_off("reset_group_off_sequence")
         else:
-            self._group_off_armed.pop(group_id, None)
+            self._discard_group_off(group_id, "reset_group_off_sequence")
 
     def _new_layer_id(self, prefix: str, entity_id: str) -> str:
         return f"{prefix}:{self.generation}:{self._order + 1}:{entity_id}"
@@ -557,8 +559,33 @@ class OwnershipEngine:
         """Intervening successful intent disarms only overlapping group sequences."""
         for group_id, targets in list(self._group_off_armed.items()):
             if targets & members:
-                self._group_off_armed.pop(group_id)
+                self._discard_group_off(group_id, "reset_group_off_for_members")
                 self._changed("intervening_group_member_intent")
+
+    def _discard_group_off(self, group_id: str, reason: str, trigger_group: str | None = None) -> None:
+        """Observe the exact arming removal site; this ledger never authorizes work."""
+        members = self._group_off_armed.pop(group_id, None)
+        if members is None:
+            return
+        self._group_off_change_serial += 1
+        self._group_off_changes.append({
+            "serial": self._group_off_change_serial,
+            "generation": self.generation,
+            "revision": self.revision,
+            "group_id": group_id,
+            "members": tuple(sorted(members))[:32],
+            "member_count": len(members),
+            "reason": reason,
+            "trigger_group_id": trigger_group,
+        })
+
+    def _clear_group_off(self, reason: str) -> None:
+        for group_id in tuple(self._group_off_armed):
+            self._discard_group_off(group_id, reason)
+
+    def group_off_changes(self) -> list[dict]:
+        """Bounded diagnostic-only removal evidence, absent from persistence."""
+        return deepcopy(list(self._group_off_changes))
 
     def entity_ids(self) -> tuple[str, ...]:
         return tuple(sorted(self._layers))

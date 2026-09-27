@@ -849,6 +849,34 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             observed_aggregate_entities=aggregate_entities,
             topology_members=burst_topology,
         )
+
+        # An already-armed group owns the next OFF interaction for its exact member
+        # set. Nested Hue aggregates from the same physical command must not create a
+        # competing group operation that would invalidate that armed sequence before
+        # the original aggregate receipt arrives.
+        if group_id is not None:
+            candidate_members = frozenset(burst_topology.get(group_id, ()))
+            leaf_set = frozenset(leaf_entities)
+            for armed_group, armed_members in self.runtime.engine.group_off_sequences().items():
+                armed_set = frozenset(armed_members)
+                if (
+                    armed_group != group_id
+                    and candidate_members
+                    and candidate_members < armed_set
+                    and armed_set <= leaf_set
+                ):
+                    candidate.update(
+                        {
+                            "promoted_to_homeowner": False,
+                            "manual_ownership_recorded": False,
+                            "promotion_reason": (
+                                "nested group suppressed by armed overlapping group "
+                                f"{armed_group}"
+                            ),
+                        }
+                    )
+                    return
+
         # The uniquely exact group must itself be the corroborating event. A
         # containing/nested aggregate arriving later cannot retroactively choose it.
         if group_id is None or group_id != current_entity_id:

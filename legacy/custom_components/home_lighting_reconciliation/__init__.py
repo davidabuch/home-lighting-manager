@@ -120,6 +120,33 @@ class Adapter:
             )
         return projected
 
+    def with_scene_monitor_corroboration(self, owners, metadata):
+        """Accept exact active scene-monitor evidence when raw Hue latest lags."""
+        result = {
+            entity: dict(info)
+            for entity, info in metadata.items()
+        }
+        for surface in SURFACES:
+            owner = owners.get(surface, {})
+            if owner.get("manual_entities"):
+                continue
+            monitor = self.hass.states.get(f"sensor.{surface}_last_recall")
+            if monitor is None or monitor.state in ("unknown", "unavailable"):
+                continue
+            if monitor.attributes.get("active") in (None, "inactive"):
+                continue
+            monitored_scene_id = monitor.attributes.get("scene_id")
+            if not isinstance(monitored_scene_id, str) or not monitored_scene_id:
+                continue
+            for _entity, info in result.items():
+                if (
+                    info.get("hue_scene_id") == monitored_scene_id
+                    and info.get("latest") is False
+                ):
+                    info["latest"] = True
+                    info["latest_corroborated_by"] = f"sensor.{surface}_last_recall"
+        return result
+
     async def inspect(self):
         owners = await self.owners()
         scripts = self.active_scripts()
@@ -146,9 +173,11 @@ class Adapter:
         self.last_evidence = members, metadata
         self.known_members.update(entity for group in members.values() for entity in group)
         owners = self.with_hlm_protection(owners, members)
+        metadata = self.with_scene_monitor_corroboration(owners, metadata)
         # Network waits can span a new ownership event. Resolve again and never use
         # old metadata for new owners; the generation loop also invalidates this pass.
         current = self.with_hlm_protection(await self.owners(), members)
+        metadata = self.with_scene_monitor_corroboration(current, metadata)
         if current != owners:
             blocked = {s: "ownership changed during inspection" for s in SURFACES}
         else:

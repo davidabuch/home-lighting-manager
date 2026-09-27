@@ -118,12 +118,13 @@ class HomeAssistantShadowObserver:
         """Load trusted evidence and begin observation without command authority."""
         raw = await self.store.async_load()
         generation = _next_generation(raw)
-        self.runtime = ShadowRuntime(generation=generation, managed_entities=self.entity_ids)
 
-        # Canonical surface topology must be admitted before recovery so persisted
-        # Manual state for a dynamically discovered member is not rejected merely
-        # because it was never copied into the historical shadow_entities list.
-        self._refresh_topology_cache()
+        # Seed canonical membership before constructing the runtime. This admits
+        # dynamically discovered members for persisted ownership recovery without
+        # incrementing engine revision and thereby closing the recovery window.
+        self._topology_members = self._snapshot_topology_cache()
+        self._seed_surface_membership(self._topology_members)
+        self.runtime = ShadowRuntime(generation=generation, managed_entities=self.entity_ids)
 
         if isinstance(raw, dict):
             self._post_boundary_off_entities = {
@@ -300,18 +301,47 @@ class HomeAssistantShadowObserver:
         )
 
     @callback
-    def _refresh_topology_cache(self) -> None:
-        """Snapshot topology and reconcile canonical surface membership."""
+    def _snapshot_topology_cache(self) -> dict[str, tuple[str, ...]]:
         cache: dict[str, tuple[str, ...]] = {}
-
         for state in self.hass.states.async_all():
             if not state.entity_id.startswith("light."):
                 continue
-
             members = _member_entity_ids(state)
             if members:
                 cache[state.entity_id] = members
+        return cache
 
+    @callback
+    def _seed_surface_membership(
+        self, cache: dict[str, tuple[str, ...]]
+    ) -> None:
+        """Establish startup membership without mutating engine revision."""
+        for surface, group_id in MANAGED_SURFACE_GROUPS.items():
+            raw = cache.get(group_id)
+            if not raw:
+                continue
+            observed = tuple(
+                sorted(set(raw) - set(self.surface_exclusions.get(surface, ())))
+            )
+            if observed:
+                self._surface_members_by_group[group_id] = observed
+
+        current_surface_members = {
+            entity_id
+            for members in self._surface_members_by_group.values()
+            for entity_id in members
+        }
+        self._surface_seen_members.update(current_surface_members)
+        static_entities = set(self._configured_entity_ids) - self._surface_seen_members
+        desired = frozenset(static_entities | current_surface_members)
+        if len(desired) > MAX_ENTITIES:
+            raise ValueError("dynamic surface membership exceeds entity capacity")
+        self.entity_ids = desired
+
+    @callback
+    def _refresh_topology_cache(self) -> None:
+        """Snapshot topology and reconcile canonical surface membership."""
+        cache = self._snapshot_topology_cache()
         self._topology_members = cache
         self._reconcile_surface_membership(cache)
 

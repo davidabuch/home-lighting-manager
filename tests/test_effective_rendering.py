@@ -231,7 +231,17 @@ async def test_diagnostic_revision_churn_does_not_abort_surface_off(rig):
             publish(rig, runtime, members)
 
     rig.before_service = diagnostic_churn
-    await evaluate(rig, "backyard")
+    await rig.hass.services.async_call(
+        "home_lighting_reconciliation",
+        "render",
+        {
+            "surface": "backyard",
+            "command": "light.turn_off",
+            "entity_id": "light.backyard",
+            "parameters": {"transition": 0},
+        },
+        blocking=True,
+    )
     assert churned
     assert all(rig.get(e).state == "off" for e in members)
     assert rig.renderer.runner.diag["last_render"]["reason"] == "selective_light_command"

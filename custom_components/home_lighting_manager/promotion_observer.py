@@ -489,7 +489,9 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         if observation.operation != "appearance":
             return
         for aggregate_id, _guard_id in _SURFACE_GUARDS:
-            exact_members = frozenset(self._topology_members.get(aggregate_id, ()))
+            exact_members = frozenset(
+                self._managed_group_members(self._topology_members.get(aggregate_id, ()))
+            )
             if len(exact_members) < 2:
                 continue
             is_aggregate = observation.entity_id == aggregate_id and bool(members)
@@ -549,7 +551,8 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         return {
             aggregate_id
             for aggregate_id, _guard_id in _SURFACE_GUARDS
-            if entity_id in self._topology_members.get(aggregate_id, ())
+            if entity_id in self.manual_precedence
+            and entity_id in self._topology_members.get(aggregate_id, ())
         }
 
     @callback
@@ -616,6 +619,29 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         self._external_group_last_observed_at = observed_at
 
     @callback
+    def _managed_group_members(self, members: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+        """Project raw Hue group membership onto entities HLM may own."""
+        return tuple(
+            sorted(
+                {
+                    entity_id
+                    for entity_id in members
+                    if entity_id in self.manual_precedence
+                }
+            )
+        )
+
+    @callback
+    def _managed_group_topology(
+        self, topology: dict[str, tuple[str, ...]]
+    ) -> dict[str, tuple[str, ...]]:
+        """Project every known Hue aggregate onto its HLM-managed ownership subset."""
+        return {
+            group_id: self._managed_group_members(members)
+            for group_id, members in topology.items()
+        }
+
+    @callback
     def _promote_single_candidate(
         self,
         candidate: dict[str, object],
@@ -630,7 +656,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
 
         if (
             current_entity_id in _CONTEXTLESS_SINGLE_MEMBER_SURFACES
-            and members == (entity_id,)
+            and self._managed_group_members(members) == (entity_id,)
         ):
             # A one-member Hue aggregate is propagation of the same physical receipt,
             # not independent evidence that a context-less leaf transition was homeowner
@@ -651,7 +677,8 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
 
         # A later leaf command needs fresh aggregate corroboration. Reusing the burst start
         # as identity lost rapid ON/OFF or appearance updates within the same window.
-        if not members or entity_id not in members:
+        managed_members = self._managed_group_members(members)
+        if not managed_members or entity_id not in managed_members:
             return
         pending = self._pending_external_leaves.get(entity_id)
         promotion_key = (pending.observation.sequence if pending else None, entity_id)
@@ -676,10 +703,15 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         # authority. Newly learned aggregate telemetry cannot self-qualify, so it must not
         # delay the already commissioned single-leaf promotion path.
         preknown_members = self._external_group_burst_topology.get(current_entity_id)
+        managed_preknown = (
+            self._managed_group_members(preknown_members)
+            if preknown_members is not None
+            else ()
+        )
         if (
-            len(members) > 1
-            and preknown_members is not None
-            and frozenset(preknown_members) == frozenset(members)
+            len(managed_members) > 1
+            and managed_preknown
+            and managed_preknown == managed_members
         ):
             self._schedule_single_promotion(candidate, promotion_key, pending)
             return
@@ -888,9 +920,11 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         if armed is None:
             return reject("rejected_group_not_armed")
 
-        exact_members = tuple(sorted(set(members)))
+        exact_members = self._managed_group_members(members)
         armed_members = tuple(sorted(set(armed)))
-        leaf_entities = _string_tuple(burst.get("leaf_entities"))
+        leaf_entities = self._managed_group_members(
+            _string_tuple(burst.get("leaf_entities"))
+        )
         if exact_members != armed_members:
             return reject("rejected_aggregate_members_mismatch")
         if leaf_entities != armed_members:
@@ -1011,8 +1045,10 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             if sync is None or sync.state != "off":
                 return False
 
-        leaf_entities = _string_tuple(burst.get("leaf_entities"))
-        exact_members = tuple(sorted(set(members)))
+        leaf_entities = self._managed_group_members(
+            _string_tuple(burst.get("leaf_entities"))
+        )
+        exact_members = self._managed_group_members(members)
         if leaf_entities != exact_members:
             return False
 
@@ -1102,7 +1138,9 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
                 self._scene_displacement_evidence.pop(aggregate_id, None)
                 continue
 
-            exact_members = tuple(sorted(set(self._topology_members.get(aggregate_id, ()))))
+            exact_members = self._managed_group_members(
+                self._topology_members.get(aggregate_id, ())
+            )
             member_set = frozenset(exact_members)
             if len(exact_members) < 2:
                 continue
@@ -1237,15 +1275,18 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             != ExternalBurstTopology.MULTI_LEAF_WITH_AGGREGATE_PROPAGATION.value
         ):
             return
-        leaf_entities = _string_tuple(burst.get("leaf_entities"))
+        leaf_entities = self._managed_group_members(
+            _string_tuple(burst.get("leaf_entities"))
+        )
         aggregate_entities = _string_tuple(burst.get("aggregate_entities"))
+        managed_topology = self._managed_group_topology(burst_topology)
         if len(leaf_entities) < 2:
             return
 
         group_id = resolve_unique_exact_group(
             leaf_entities=leaf_entities,
             observed_aggregate_entities=aggregate_entities,
-            topology_members=burst_topology,
+            topology_members=managed_topology,
         )
 
         # An already-armed group owns the next OFF interaction for its exact member
@@ -1253,7 +1294,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         # competing group operation that would invalidate that armed sequence before
         # the original aggregate receipt arrives.
         if group_id is not None:
-            candidate_members = frozenset(burst_topology.get(group_id, ()))
+            candidate_members = frozenset(managed_topology.get(group_id, ()))
             leaf_set = frozenset(leaf_entities)
             for armed_group, armed_members in self.runtime.engine.group_off_sequences().items():
                 armed_set = frozenset(armed_members)

@@ -126,7 +126,12 @@ class HomeAssistantShadowObserver:
         # incrementing engine revision and thereby closing the recovery window.
         self._topology_members = self._snapshot_topology_cache()
         persisted_surface_members = _persisted_surface_members(raw, self.surface_exclusions)
-        self._seed_surface_membership(self._topology_members, persisted_surface_members)
+        persisted_surface_seen = _persisted_surface_seen_members(raw)
+        self._seed_surface_membership(
+            self._topology_members,
+            persisted_surface_members,
+            persisted_surface_seen,
+        )
         self.runtime = ShadowRuntime(generation=generation, managed_entities=self.entity_ids)
 
         if isinstance(raw, dict):
@@ -209,6 +214,7 @@ class HomeAssistantShadowObserver:
             surface: list(self._surface_members_by_group.get(group_id, ()))
             for surface, group_id in MANAGED_SURFACE_GROUPS.items()
         }
+        payload["managed_surface_seen_members"] = sorted(self._surface_seen_members)
         await self.store.async_save(payload)
         self._storage_status = "saved"
         self._publish_diagnostics()
@@ -323,6 +329,7 @@ class HomeAssistantShadowObserver:
         self,
         cache: dict[str, tuple[str, ...]],
         persisted: dict[str, tuple[str, ...]] | None = None,
+        persisted_seen: frozenset[str] | None = None,
     ) -> None:
         """Establish startup membership without mutating engine revision.
 
@@ -331,6 +338,7 @@ class HomeAssistantShadowObserver:
         apparent removals wait for the normal stability confirmation.
         """
         persisted = persisted or {}
+        persisted_seen = persisted_seen or frozenset()
         for surface, group_id in MANAGED_SURFACE_GROUPS.items():
             exclusions = set(self.surface_exclusions.get(surface, ()))
             previous = set(persisted.get(surface, ())) - exclusions
@@ -350,7 +358,9 @@ class HomeAssistantShadowObserver:
             for members in persisted.values()
             for entity_id in members
         }
-        self._surface_seen_members.update(current_surface_members | historical_surface_members)
+        self._surface_seen_members.update(
+            current_surface_members | historical_surface_members | set(persisted_seen)
+        )
         static_entities = set(self._configured_entity_ids) - self._surface_seen_members
         desired = frozenset(static_entities | current_surface_members)
         if len(desired) > MAX_ENTITIES:
@@ -786,6 +796,25 @@ def _optional_int_tuple(value: Any, length: int) -> tuple[int, ...] | None:
     if not all(isinstance(item, int) and not isinstance(item, bool) for item in value):
         return None
     return tuple(value)
+
+
+def _persisted_surface_seen_members(raw: Any) -> frozenset[str]:
+    """Remember entities that canonical topology has governed across prior restarts."""
+    if not isinstance(raw, dict):
+        return frozenset()
+    items = raw.get("managed_surface_seen_members")
+    if not isinstance(items, list):
+        return frozenset()
+    seen = {
+        item
+        for item in items
+        if isinstance(item, str)
+        and item.startswith("light.")
+        and len(item) <= 256
+    }
+    if len(seen) > MAX_ENTITIES:
+        return frozenset()
+    return frozenset(seen)
 
 
 def _persisted_surface_members(

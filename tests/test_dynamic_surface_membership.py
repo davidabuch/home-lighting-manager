@@ -17,9 +17,9 @@ def test_managed_membership_update_preserves_retained_state_and_invalidates_grou
     b = "light.b"
     c = "light.c"
     engine = OwnershipEngine(managed_entities=frozenset((a, b)))
-    engine.push_manual_off(a)
     engine.apply_group_off("light.group", (a, b))
     assert engine.group_off_sequences()
+    engine.push_manual_off(a)
 
     result = engine.update_managed_entities(frozenset((a, b, c)))
 

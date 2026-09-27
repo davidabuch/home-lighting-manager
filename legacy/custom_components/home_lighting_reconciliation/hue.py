@@ -14,7 +14,7 @@ class HueEvidence:
     def __init__(self, hass):
         self.hass = hass
 
-    async def apply_actions(self, scene_info, protected=()):
+    async def apply_actions(self, scene_info, protected=(), valid=None):
         """Apply authoritative Hue V2 light actions except protected HA entities.
 
         The complete plan is validated before any network write so malformed or
@@ -73,6 +73,11 @@ class HueEvidence:
         applied = []
 
         for entity, rid, action in plan:
+            if valid is not None and not await valid():
+                break
+            state = self.hass.states.get(entity)
+            if valid is not None and (state is None or state.state in ("unknown", "unavailable")):
+                continue
             try:
                 async with session.put(
                     f"https://{entry.data['host']}/clip/v2/resource/light/{rid}",

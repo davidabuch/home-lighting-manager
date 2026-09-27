@@ -21,6 +21,10 @@ def find_light_turn_on(sequence, entity_id):
         if not isinstance(step, dict):
             continue
 
+        if step.get("action") == "home_lighting_reconciliation.render":
+            request = step["data"]
+            if request["command"] == "light.turn_on" and request["entity_id"] == entity_id:
+                return {"data": request["parameters"]}
         if step.get("action") == "light.turn_on":
             target = step.get("target", {}).get("entity_id")
             targets = target if isinstance(target, list) else [target]
@@ -127,7 +131,7 @@ async def test_adapter_selective_scene_repair_uses_hue_executor(rig):
 
     calls = []
 
-    async def apply_actions(actual_scene_info, protected=()):
+    async def apply_actions(actual_scene_info, protected=(), valid=None):
         calls.append((actual_scene_info, tuple(protected)))
         return [
             entity
@@ -214,7 +218,7 @@ async def test_adapter_selective_scene_repair_fails_closed_without_scene_info(ri
 
     called = False
 
-    async def apply_actions(scene_info, protected=()):
+    async def apply_actions(scene_info, protected=(), valid=None):
         nonlocal called
         called = True
         return []
@@ -284,7 +288,7 @@ async def test_adapter_selective_scene_repair_fails_closed_on_hue_error(rig):
 
     assert len(selective) == 1
 
-    async def apply_actions(scene_info, protected=()):
+    async def apply_actions(scene_info, protected=(), valid=None):
         raise ValueError("Hue light action failed")
 
     a.hue.apply_actions = apply_actions
@@ -541,7 +545,7 @@ async def test_actual_score_sequence_suppressed_and_restores(rig):
         "to_state": SimpleNamespace(state="IN", attributes={"team_score": 10}),
     }
     await rig.run("49ers_live_game_lighting_and_score_celebration", {"trigger": trigger})
-    assert len(checks) == 7
+    assert len(checks) == 7 * (len(rig.members["main_area"]) + len(rig.members["front_eve"]))
     assert [d["entity_id"] for s, d in rig.lights() if s == "scene.turn_on"] == [
         "scene.front_eve_zone_49ers",
         "scene.holiday_main_area_49ers",

@@ -36,6 +36,7 @@ from .intent_policy import (
 )
 from .model import Appearance, LayerKind, OwnershipLayer
 from .persistence import STORE_ENVELOPE_VERSION, deserialize_state
+from .projection import effective_ownership
 from .recovery import ManualRecoveryEvidence
 from .shadow import ShadowDecision, ShadowObservation, ShadowRuntime
 
@@ -375,6 +376,10 @@ class HomeAssistantShadowObserver:
         diagnostics = self.runtime.diagnostics()
         attrs: dict[str, Any] = {
             "generation": diagnostics.generation,
+            "effective_ownership": effective_ownership(
+                self.runtime.engine, set(self.entity_ids) - set(self._topology_members),
+                {g: m for g, m in self._topology_members.items() if g in self.entity_ids}
+            ),
             "observed_events": diagnostics.observed_events,
             "homeowner_events": diagnostics.homeowner_events,
             "ignored_or_hlm_events": diagnostics.ignored_or_hlm_events,

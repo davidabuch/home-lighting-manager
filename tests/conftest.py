@@ -170,6 +170,49 @@ async def rig(tmp_path):
     rig.set("sensor.nfl_san_francisco_49ers", "PRE")
     for name, obj in PACKAGE["script"].items():
         rig.install_script(name, obj)
+    # Real shared legacy dispatch with deterministic Hue resource evidence.
+    from custom_components.home_lighting_reconciliation import Adapter
+    from custom_components.home_lighting_reconciliation.engine import GROUPS, commands_in
+    rig.set("sensor.home_lighting_manager_shadow_health", "observing", {
+        "command_authority": False, "manual_precedence_entities": [],
+        "reconciliation_protected_entities": [],
+    })
+    rig.renderer = Adapter(hass)
+    rig.members = {}
+    for surface in GROUPS:
+        entries = commands_in(PACKAGE["script"]["home_lighting_apply_" + surface + "_baseline"]["sequence"])
+        rig.members[surface] = [e for service, e, _ in entries if service != "scene.turn_on"]
+    rig.members["path"] = ["light.front_yard_front_path_light_1"] + [
+        f"light.front_yard_front_yard_path_light_{i}" for i in range(2, 7)]
+    rig.members["backyard"] = ["light.backyard_spa_strip_lights"] + [f"light.backyard_test_{i}" for i in range(10)]
+    rig.scene_actions = {}
+    for surface, members in rig.members.items():
+        for entity in members:
+            rig.set(entity, "off")
+        rig.set(GROUPS[surface], "off", {"entity_id": members})
+    rig.set("light.driveway_path_lights", "off", {"entity_id": rig.members["path"]})
+    rig.set("light.backyard", "off", {"entity_id": rig.members["backyard"]})
+
+    async def hue_read(scenes, surfaces):
+        metadata = {}
+        for scene in scenes:
+            surface = surfaces[0]
+            actions = {e: {"rid": e, "action": {"on": {"on": True}}} for e in rig.members[surface]}
+            metadata[scene] = rig.scene_actions.get(scene, {"actions": actions, "latest": True})
+        return {s: rig.members[s] for s in surfaces}, metadata
+
+    async def hue_apply(info, protected=(), valid=None):
+        applied = []
+        for entity, action in info["actions"].items():
+            if entity in protected or (valid and not await valid()):
+                continue
+            rig.calls.append(("hue.apply_action", {"entity_id": entity, "action": action["action"]}))
+            rig.set(entity, "on" if action["action"]["on"]["on"] else "off")
+            applied.append(entity)
+        return applied
+    rig.renderer.hue.read = hue_read
+    rig.renderer.hue.apply_actions = hue_apply
+    rig.renderer.register_renderer()
     yield rig
     for script in rig.scripts.values():
         await script.async_stop()

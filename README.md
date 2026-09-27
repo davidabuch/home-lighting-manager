@@ -16,6 +16,18 @@ explicit operation model, OFF semantics, persistence, and deferred migration wor
 [contract acceptance matrix](docs/ownership-acceptance-scenarios.md) for executable versus deferred
 coverage. This work does not migrate or disable the legacy production implementation.
 
+## Effective ownership to legacy rendering
+
+The [rendering bridge ADR](docs/adr/0003-effective-ownership-rendering.md) defines the shared
+per-entity projection consumed by Main, Front Eve, Path, Backyard and the legacy verifier.
+Manual appearance and Manual-OFF remain distinct; automatic eligibility stays underneath.
+The legacy reconciliation integration executes filtered requests, while HLM remains observation-only.
+Mixed scenes use selective static Hue actions, not recall-then-restore. Native mixed dynamic playback
+and the remaining functional/alert snapshot policies are not claimed as fully migrated.
+
+Deployment requires the matching legacy integration, package and HLM code; an HLM-only HACS update
+cannot install this package bridge. Physical commissioning remains a separate approval step.
+
 ## Managed surfaces
 
 The current installation manages:

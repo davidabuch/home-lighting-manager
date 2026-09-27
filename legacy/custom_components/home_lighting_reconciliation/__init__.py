@@ -16,6 +16,7 @@ from homeassistant.util import dt as dt_util
 from .const import CONTROL, DOMAIN, EVALUATORS, HLM_DIAGNOSTIC, SIGNAL, SURFACES, TRANSIENTS
 from .engine import GROUPS, LIQUOR, commands_in, verify
 from .hue import HueEvidence
+from .rendering import project_owners, render
 from .runtime import Reconciler
 
 _LOGGER = logging.getLogger(__name__)
@@ -32,6 +33,47 @@ class Adapter:
         self.known_members = {*GROUPS.values(), LIQUOR}
         self.last_logged = None
         self.last_evidence = ({}, {})
+
+    def render_note(self, surface, reason, entities):
+        self.runner.diag["last_render"] = {
+            "surface": surface,
+            "reason": reason,
+            "entities": list(entities)[:32],
+            "timestamp": self.now(),
+        }
+        async_dispatcher_send(self.hass, SIGNAL)
+
+    def register_renderer(self):
+        async def execute(call):
+            try:
+                await render(
+                    self,
+                    call.data["surface"],
+                    call.data["command"],
+                    call.data["entity_id"],
+                    call.data.get("parameters", {}),
+                    call.context,
+                    call.data.get("expected_owner"),
+                )
+            except ValueError as err:
+                self.render_note(call.data["surface"], str(err), [])
+
+        self.hass.services.async_register(
+            DOMAIN,
+            "render",
+            execute,
+            schema=vol.Schema(
+                {
+                    vol.Required("surface"): vol.In(SURFACES),
+                    vol.Required("command"): vol.In(
+                        ("light.turn_on", "light.turn_off", "scene.turn_on")
+                    ),
+                    vol.Required("entity_id"): vol.Any(str, [str]),
+                    vol.Optional("parameters", default={}): dict,
+                    vol.Optional("expected_owner"): str,
+                }
+            ),
+        )
 
     def active_scripts(self):
         """Read the actually loaded baselines, including after a script reload.
@@ -103,22 +145,7 @@ class Adapter:
         return result
 
     def with_hlm_protection(self, owners, members):
-        """Project HLM per-leaf protection into every reconciled surface."""
-        diagnostic = self.hass.states.get(HLM_DIAGNOSTIC)
-        protected = set(
-            diagnostic.attributes.get("reconciliation_protected_entities") or ()
-        ) if diagnostic is not None else set()
-        projected = {
-            surface: dict(value)
-            for surface, value in owners.items()
-        }
-        for surface in SURFACES:
-            existing = set(projected[surface].get("manual_entities", ()))
-            group_members = set(members.get(surface, ()))
-            projected[surface]["manual_entities"] = sorted(
-                existing | (protected & group_members)
-            )
-        return projected
+        return project_owners(self.hass, owners, members)
 
     def with_scene_monitor_corroboration(self, owners, metadata):
         """Accept exact active scene-monitor evidence when raw Hue latest lags."""
@@ -246,9 +273,14 @@ class Adapter:
                 return False
 
             try:
+                async def still_current():
+                    latest = self.with_hlm_protection(await self.owners(), members)
+                    return valid() and latest == owners and not self.suppression().get(command.surface)
+
                 await self.hue.apply_actions(
                     scene_info,
                     protected=command.data.get("protected", ()),
+                    valid=still_current,
                 )
             except ValueError:
                 return False
@@ -280,6 +312,7 @@ class Adapter:
                 if (
                     old
                     and new
+                    and old.attributes.get("effective_ownership") == new.attributes.get("effective_ownership")
                     and old.attributes.get("manual_precedence_entities")
                     == new.attributes.get("manual_precedence_entities")
                     and old.attributes.get("reconciliation_protected_entities")
@@ -339,6 +372,7 @@ class Adapter:
 async def async_setup(hass, config):
     adapter = Adapter(hass)
     hass.data[DOMAIN] = adapter
+    adapter.register_renderer()
     await discovery.async_load_platform(hass, "sensor", DOMAIN, {}, config)
     unsub = hass.bus.async_listen(EVENT_STATE_CHANGED, adapter.changed)
 

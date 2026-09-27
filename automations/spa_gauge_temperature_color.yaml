@@ -179,39 +179,48 @@
           - condition: state
             entity_id: input_boolean.home_lighting_manual_backyard
             state: 'off'
-          - action: light.turn_on
-            target:
-              entity_id: light.backyard_spa_strip_lights
+          - action: home_lighting_reconciliation.render
             data:
-              xy_color:
-              - '{{ gauge_x }}'
-              - '{{ gauge_y }}'
-              brightness: '{{ gauge_brightness | int }}'
-              transition: 0
+              surface: backyard
+              expected_owner: spa
+              command: light.turn_on
+              entity_id: light.backyard_spa_strip_lights
+              parameters:
+                xy_color:
+                - '{{ gauge_x }}'
+                - '{{ gauge_y }}'
+                brightness: '{{ gauge_brightness | int }}'
+                transition: 0
           - delay:
               milliseconds: 350
           - condition: state
             entity_id: input_boolean.home_lighting_manual_backyard
             state: 'off'
-          - action: light.turn_off
-            target:
-              entity_id: light.backyard_spa_strip_lights
+          - action: home_lighting_reconciliation.render
             data:
-              transition: 0
+              surface: backyard
+              expected_owner: spa
+              command: light.turn_off
+              entity_id: light.backyard_spa_strip_lights
+              parameters:
+                transition: 0
           - delay:
               milliseconds: 250
       - condition: state
         entity_id: input_boolean.home_lighting_manual_backyard
         state: 'off'
-      - action: light.turn_on
-        target:
-          entity_id: light.backyard_spa_strip_lights
+      - action: home_lighting_reconciliation.render
         data:
-          xy_color:
-          - '{{ gauge_x }}'
-          - '{{ gauge_y }}'
-          brightness: '{{ gauge_brightness | int }}'
-          transition: 2
+          surface: backyard
+          expected_owner: spa
+          command: light.turn_on
+          entity_id: light.backyard_spa_strip_lights
+          parameters:
+            xy_color:
+            - '{{ gauge_x }}'
+            - '{{ gauge_y }}'
+            brightness: '{{ gauge_brightness | int }}'
+            transition: 2
     - conditions:
       - condition: template
         value_template: '{{ spa_enabled }}'
@@ -221,15 +230,18 @@
       - condition: state
         entity_id: input_boolean.home_lighting_manual_backyard
         state: 'off'
-      - action: light.turn_on
-        target:
-          entity_id: light.backyard_spa_strip_lights
+      - action: home_lighting_reconciliation.render
         data:
-          xy_color:
-          - '{{ gauge_x }}'
-          - '{{ gauge_y }}'
-          brightness: '{{ gauge_brightness | int }}'
-          transition: 2
+          surface: backyard
+          expected_owner: spa
+          command: light.turn_on
+          entity_id: light.backyard_spa_strip_lights
+          parameters:
+            xy_color:
+            - '{{ gauge_x }}'
+            - '{{ gauge_y }}'
+            brightness: '{{ gauge_brightness | int }}'
+            transition: 2
     - conditions:
       - condition: template
         value_template: '{{ spa_enabled }}'
@@ -274,15 +286,18 @@
           - condition: state
             entity_id: input_boolean.home_lighting_manual_backyard
             state: 'off'
-          - action: light.turn_on
-            target:
-              entity_id: light.backyard_spa_strip_lights
+          - action: home_lighting_reconciliation.render
             data:
-              xy_color:
-              - '{{ gauge_x }}'
-              - '{{ gauge_y }}'
-              brightness: '{{ pulse_low_brightness | int }}'
-              transition: 2.5
+              surface: backyard
+              expected_owner: spa
+              command: light.turn_on
+              entity_id: light.backyard_spa_strip_lights
+              parameters:
+                xy_color:
+                - '{{ gauge_x }}'
+                - '{{ gauge_y }}'
+                brightness: '{{ pulse_low_brightness | int }}'
+                transition: 2.5
           - delay:
               seconds: 2
           - delay:
@@ -290,15 +305,18 @@
           - condition: state
             entity_id: input_boolean.home_lighting_manual_backyard
             state: 'off'
-          - action: light.turn_on
-            target:
-              entity_id: light.backyard_spa_strip_lights
+          - action: home_lighting_reconciliation.render
             data:
-              xy_color:
-              - '{{ gauge_x }}'
-              - '{{ gauge_y }}'
-              brightness: '{{ gauge_brightness | int }}'
-              transition: 2.5
+              surface: backyard
+              expected_owner: spa
+              command: light.turn_on
+              entity_id: light.backyard_spa_strip_lights
+              parameters:
+                xy_color:
+                - '{{ gauge_x }}'
+                - '{{ gauge_y }}'
+                brightness: '{{ gauge_brightness | int }}'
+                transition: 2.5
           - delay:
               seconds: 2
           - delay:
@@ -310,13 +328,16 @@
       - condition: state
         entity_id: input_boolean.home_lighting_manual_backyard
         state: 'off'
-      - action: light.turn_on
-        target:
-          entity_id: light.backyard_spa_strip_lights
+      - action: home_lighting_reconciliation.render
         data:
-          xy_color:
-          - '{{ gauge_x }}'
-          - '{{ gauge_y }}'
-          brightness: '{{ gauge_brightness | int }}'
-          transition: 2
+          surface: backyard
+          expected_owner: spa
+          command: light.turn_on
+          entity_id: light.backyard_spa_strip_lights
+          parameters:
+            xy_color:
+            - '{{ gauge_x }}'
+            - '{{ gauge_y }}'
+            brightness: '{{ gauge_brightness | int }}'
+            transition: 2
   mode: restart

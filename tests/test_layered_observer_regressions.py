@@ -927,7 +927,7 @@ async def test_authoritative_manual_scene_group_off_releases_despite_nested_aggr
         assert attrs["latest_homeowner_operation"]["group_id"] == main
         assert attrs["latest_homeowner_operation"]["kind"] == "off"
         assert attrs["latest_homeowner_operation"]["reason"] == "released_to_hlm"
-        assert attrs["group_off_sequences"][main] == sorted(leaves)
+        assert tuple(attrs["group_off_sequences"][main]) == tuple(sorted(leaves))
         assert attrs["command_authority"] is False
 
         # The underlying Daily layer is then rendered back ON by HA. This is not

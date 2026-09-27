@@ -239,6 +239,24 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         else:
             self._publish_diagnostics()
 
+    async def async_reset_homeowner_control(self) -> dict[str, int]:
+        """Cancel pre-reset promotion evidence, then clear homeowner ownership state."""
+        for cancel in tuple(self._pending_single_promotions.values()):
+            cancel()
+        self._pending_single_promotions.clear()
+        for _members, cancel in tuple(self._pending_overlapping_group_promotions.values()):
+            cancel()
+        self._pending_overlapping_group_promotions.clear()
+        self._pending_external_leaves.clear()
+        self._external_group_burst_topology = {}
+        self._external_group_last_observed_at = None
+        self._scene_recall_settle_until.clear()
+        self._last_external_promotion_key = None
+        self._last_external_promotion_outcome = None
+        self._last_external_group_promotion_key = None
+        self._last_external_group_promotion_outcome = None
+        return await super().async_reset_homeowner_control()
+
     async def async_shutdown(self) -> None:
         """Cancel provisional promotions before unregistering the observer."""
         for cancel in tuple(self._pending_single_promotions.values()):

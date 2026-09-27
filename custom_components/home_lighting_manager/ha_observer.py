@@ -43,6 +43,14 @@ from .shadow import ShadowDecision, ShadowObservation, ShadowRuntime
 DOMAIN = "home_lighting_manager"
 CONF_SHADOW_ENTITIES = "shadow_entities"
 CONF_MANUAL_PRECEDENCE = "manual_precedence"
+CONF_SURFACE_EXCLUSIONS = "surface_exclusions"
+MANAGED_SURFACE_GROUPS = {
+    "main_area": "light.holiday_main_area",
+    "front_eve": "light.front_eve_zone",
+    "path": "light.holiday_path",
+    "backyard": "light.holiday_backyard",
+}
+SURFACE_MEMBERSHIP_REMOVAL_CONFIRM_SECONDS = 5.0
 STORAGE_KEY = f"{DOMAIN}.shadow"
 RUNTIME_DATA_KEY = f"{DOMAIN}_shadow_runtime"
 DIAGNOSTIC_ENTITY_ID = "sensor.home_lighting_manager_shadow_health"
@@ -57,6 +65,9 @@ CONFIG_SCHEMA = vol.Schema(
                 vol.Required(CONF_SHADOW_ENTITIES): vol.All(cv.entity_ids, vol.Length(max=MAX_ENTITIES)),
                 vol.Optional(CONF_MANUAL_PRECEDENCE, default={}): {
                     cv.entity_id: vol.All(vol.Coerce(int), vol.Range(min=0)),
+                },
+                vol.Optional(CONF_SURFACE_EXCLUSIONS, default={}): {
+                    vol.In(tuple(MANAGED_SURFACE_GROUPS)): cv.entity_ids,
                 },
             }
         )
@@ -73,12 +84,22 @@ class HomeAssistantShadowObserver:
         hass: HomeAssistant,
         entity_ids: list[str],
         manual_precedence: dict[str, int] | None = None,
+        surface_exclusions: dict[str, list[str]] | None = None,
     ) -> None:
         if len(set(entity_ids)) > MAX_ENTITIES:
             raise ValueError("shadow entity capacity exceeded")
         self.hass = hass
+        self._configured_entity_ids = frozenset(entity_ids)
         self.entity_ids = frozenset(entity_ids)
         self.manual_precedence = dict(manual_precedence or {})
+        self.surface_exclusions = {
+            surface: frozenset(items)
+            for surface, items in (surface_exclusions or {}).items()
+        }
+        self._surface_members_by_group: dict[str, tuple[str, ...]] = {}
+        self._surface_seen_members: set[str] = set()
+        self._pending_surface_membership: dict[str, tuple[tuple[str, ...], datetime]] = {}
+        self._membership_confirmation_cancel: Any | None = None
         self.store: Store[dict[str, Any]] = Store(hass, STORE_ENVELOPE_VERSION, STORAGE_KEY)
         self.runtime = ShadowRuntime(generation=1, managed_entities=self.entity_ids)
         self._unsubscribers: list[Any] = []
@@ -103,7 +124,7 @@ class HomeAssistantShadowObserver:
             self._post_boundary_off_entities = {
                 entity_id
                 for entity_id in raw.get("post_boundary_off_entities", [])
-                if isinstance(entity_id, str) and entity_id in self.manual_precedence
+                if isinstance(entity_id, str) and entity_id in self.entity_ids
             }
             persisted = deserialize_state(raw)
             saved_at = _parse_saved_at(raw.get("saved_at"))
@@ -160,7 +181,7 @@ class HomeAssistantShadowObserver:
         result = self.runtime.reset_homeowner_control()
         self._external_correlator.reset()
         self._external_burst = None
-        self._post_boundary_off_entities = set(self.manual_precedence)
+        self._post_boundary_off_entities = self._boundary_managed_entities()
         self._last_decision = None
         self._evidence_ledger.clear()
         await self.async_save()
@@ -180,6 +201,8 @@ class HomeAssistantShadowObserver:
 
     async def _async_state_changed(self, event: Event) -> None:
         entity_id = event.data.get("entity_id")
+        if entity_id in MANAGED_SURFACE_GROUPS.values():
+            self._refresh_topology_cache()
         if entity_id not in self.entity_ids:
             return
 
@@ -272,7 +295,7 @@ class HomeAssistantShadowObserver:
 
     @callback
     def _refresh_topology_cache(self) -> None:
-        """Snapshot aggregate membership from all live HA light states."""
+        """Snapshot topology and reconcile canonical surface membership."""
         cache: dict[str, tuple[str, ...]] = {}
 
         for state in self.hass.states.async_all():
@@ -284,6 +307,128 @@ class HomeAssistantShadowObserver:
                 cache[state.entity_id] = members
 
         self._topology_members = cache
+        self._reconcile_surface_membership(cache)
+
+    @callback
+    def _reconcile_surface_membership(
+        self, cache: dict[str, tuple[str, ...]]
+    ) -> None:
+        """Adopt canonical Hue members without manufacturing ownership.
+
+        Additions are safe to adopt immediately because canonical group topology is
+        authoritative membership evidence, not homeowner intent. Removals are
+        confirmed across a short delay so transient Hue startup/integration gaps
+        cannot discard valid Manual state.
+        """
+        now = dt_util.now()
+        changed = False
+        removal_pending = False
+
+        for surface, group_id in MANAGED_SURFACE_GROUPS.items():
+            raw = cache.get(group_id)
+            if not raw:
+                continue
+            observed = tuple(
+                sorted(set(raw) - set(self.surface_exclusions.get(surface, ())))
+            )
+            if not observed:
+                continue
+
+            current = self._surface_members_by_group.get(group_id)
+            if current is None:
+                self._surface_members_by_group[group_id] = observed
+                self._pending_surface_membership.pop(group_id, None)
+                changed = True
+                continue
+            if observed == current:
+                self._pending_surface_membership.pop(group_id, None)
+                continue
+
+            # Pure additions cannot invalidate existing ownership and are adopted
+            # immediately. Any removal waits for stable second evidence.
+            if set(current).issubset(observed):
+                self._surface_members_by_group[group_id] = observed
+                self._pending_surface_membership.pop(group_id, None)
+                changed = True
+                continue
+
+            pending = self._pending_surface_membership.get(group_id)
+            if (
+                pending is not None
+                and pending[0] == observed
+                and (now - pending[1]).total_seconds()
+                >= SURFACE_MEMBERSHIP_REMOVAL_CONFIRM_SECONDS
+            ):
+                self._surface_members_by_group[group_id] = observed
+                self._pending_surface_membership.pop(group_id, None)
+                changed = True
+            else:
+                if pending is None or pending[0] != observed:
+                    self._pending_surface_membership[group_id] = (observed, now)
+                removal_pending = True
+
+        if removal_pending:
+            self._schedule_membership_confirmation()
+
+        if not changed:
+            return
+
+        current_surface_members = {
+            entity_id
+            for members in self._surface_members_by_group.values()
+            for entity_id in members
+        }
+        self._surface_seen_members.update(current_surface_members)
+
+        # Once an entity has been observed as a canonical surface member, surface
+        # topology—not the historical shadow_entities list—governs its membership.
+        static_entities = set(self._configured_entity_ids) - self._surface_seen_members
+        desired = frozenset(static_entities | current_surface_members)
+        if len(desired) > MAX_ENTITIES:
+            raise ValueError("dynamic surface membership exceeds entity capacity")
+
+        previous = self.entity_ids
+        self.entity_ids = desired
+        membership = self.runtime.update_managed_entities(desired)
+        added = tuple(membership["added"])
+        removed = tuple(membership["removed"])
+        if not added and not removed:
+            return
+
+        self._post_boundary_off_entities.intersection_update(desired)
+        self._managed_membership_changed(added, removed)
+        self._publish_diagnostics()
+        if self._unsubscribers:
+            self.hass.async_create_task(self.async_save())
+
+    @callback
+    def _schedule_membership_confirmation(self) -> None:
+        if self._membership_confirmation_cancel is not None:
+            return
+
+        def confirm(_now: datetime) -> None:
+            self._membership_confirmation_cancel = None
+            self._refresh_topology_cache()
+
+        cancel = async_call_later(
+            self.hass,
+            SURFACE_MEMBERSHIP_REMOVAL_CONFIRM_SECONDS,
+            confirm,
+        )
+        self._membership_confirmation_cancel = cancel
+
+    @callback
+    def _managed_membership_changed(
+        self, added: tuple[str, ...], removed: tuple[str, ...]
+    ) -> None:
+        """Subclass hook for invalidating correlation evidence after topology changes."""
+
+    def _boundary_managed_entities(self) -> set[str]:
+        return set(self.manual_precedence) | {
+            entity_id
+            for members in self._surface_members_by_group.values()
+            for entity_id in members
+        }
 
     @callback
     def _member_entity_ids_for_event(
@@ -313,7 +458,7 @@ class HomeAssistantShadowObserver:
         self._nightly_boundary_settle_until = now + timedelta(
             seconds=NIGHTLY_BOUNDARY_SETTLE_SECONDS
         )
-        self._post_boundary_off_entities = set(self.manual_precedence)
+        self._post_boundary_off_entities = self._boundary_managed_entities()
         self.runtime.engine.expire_boundary(NIGHTLY_BOUNDARY)
         self.hass.async_create_task(self.async_save())
 
@@ -413,6 +558,16 @@ class HomeAssistantShadowObserver:
             ),
             "topology_aggregate_entities": sorted(self._topology_members)[:32],
             "topology_cache_ready": bool(self._topology_members),
+            "managed_surface_groups": dict(MANAGED_SURFACE_GROUPS),
+            "managed_surface_members": {
+                surface: list(self._surface_members_by_group.get(group_id, ()))
+                for surface, group_id in MANAGED_SURFACE_GROUPS.items()
+            },
+            "managed_surface_exclusions": {
+                surface: sorted(items)
+                for surface, items in self.surface_exclusions.items()
+                if items
+            },
         }
         attrs.update(self.runtime.ownership_diagnostics())
         attrs.update(self.off_attempt_diagnostics())

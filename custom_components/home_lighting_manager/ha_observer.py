@@ -433,7 +433,7 @@ class HomeAssistantShadowObserver:
         self._post_boundary_off_entities.intersection_update(desired)
         self._managed_membership_changed(added, removed)
         self._publish_diagnostics()
-        if self._unsubscribers:
+        if self._unsubscribers and self.hass.is_running:
             self.hass.async_create_task(self.async_save())
 
     @callback

@@ -180,6 +180,9 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
                 }
             return
 
+        self._scene_displacement_until.pop(aggregate_id, None)
+        self._scene_displacement_evidence.pop(aggregate_id, None)
+
         scene_id = new_state.attributes.get("scene_id")
         if not isinstance(scene_id, str) or not scene_id or len(scene_id) > 256:
             return
@@ -317,6 +320,8 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         self._external_burst = None
         self._external_group_burst_topology = {}
         self._external_group_last_observed_at = None
+        self._scene_displacement_until.clear()
+        self._scene_displacement_evidence.clear()
         super()._handle_nightly_boundary(now)
 
     @callback

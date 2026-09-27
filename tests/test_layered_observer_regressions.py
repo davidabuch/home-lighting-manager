@@ -1481,3 +1481,233 @@ async def test_displaced_backyard_scene_can_correlate_preceding_leaf_fanout(tmp_
     finally:
         await observer.async_shutdown()
         await hass.async_block_till_done()
+
+
+@pytest.mark.parametrize(
+    ("aggregate", "recall_sensor", "guard", "sync"),
+    (
+        (
+            "light.holiday_main_area",
+            "sensor.main_area_last_recall",
+            "input_boolean.home_lighting_ha_guard_main_area",
+            "binary_sensor.hue_bridge_living_room",
+        ),
+        (
+            "light.holiday_path",
+            "sensor.path_last_recall",
+            "input_boolean.home_lighting_ha_guard_path",
+            None,
+        ),
+        (
+            "light.holiday_backyard",
+            "sensor.backyard_last_recall",
+            "input_boolean.home_lighting_ha_guard_backyard",
+            "binary_sensor.hue_bridge_backyard",
+        ),
+    ),
+)
+@pytest.mark.asyncio
+async def test_all_multi_member_surfaces_use_managed_subset_for_first_and_second_group_off(
+    tmp_path, aggregate, recall_sensor, guard, sync
+):
+    """Hue-only decorative members never break the universal group ownership contract."""
+    from datetime import timedelta
+
+    from homeassistant.util import dt as dt_util
+
+    leaves = (
+        f"light.{aggregate.split('.')[-1]}_managed_a",
+        f"light.{aggregate.split('.')[-1]}_managed_b",
+    )
+    unmanaged = f"light.{aggregate.split('.')[-1]}_unmanaged_decorative"
+    hass, observer = await observer_for(tmp_path, [*leaves, aggregate])
+    try:
+        await seed_group(hass, aggregate, (*leaves, unmanaged), state="off")
+        hass.states.async_set(guard, "off")
+        if sync is not None:
+            hass.states.async_set(sync, "off")
+        await hass.async_block_till_done()
+
+        old = dt_util.now() - timedelta(minutes=5)
+        recalled = dt_util.now()
+        hass.states.async_set(
+            recall_sensor,
+            old.isoformat(),
+            {"scene_name": "Manual test", "scene_id": "scene-manual-test"},
+        )
+        await hass.async_block_till_done()
+        hass.states.async_set(
+            recall_sensor,
+            recalled.isoformat(),
+            {"scene_name": "Manual test", "scene_id": "scene-manual-test"},
+        )
+        await hass.async_block_till_done()
+
+        assert all(
+            observer.runtime.engine.resolve(entity).layer is not None
+            and observer.runtime.engine.resolve(entity).layer.kind is LayerKind.MANUAL
+            for entity in leaves
+        )
+
+        render_context = Context(parent_id="scene-render")
+        for entity in leaves:
+            hass.states.async_set(
+                entity,
+                "on",
+                {"brightness": 170, "dynamics": "none"},
+                context=render_context,
+            )
+        hass.states.async_set(
+            aggregate,
+            "on",
+            {"entity_id": [*leaves, unmanaged]},
+            context=render_context,
+        )
+        await hass.async_block_till_done()
+
+        first = recalled + timedelta(seconds=3)
+        with patch(
+            "custom_components.home_lighting_manager.promotion_observer.dt_util.now",
+            return_value=first,
+        ):
+            for entity in leaves:
+                hass.states.async_set(entity, "off", {"dynamics": "dynamic_palette"})
+                await hass.async_block_till_done()
+            hass.states.async_set(
+                aggregate,
+                "off",
+                {"entity_id": [*leaves, unmanaged]},
+            )
+            await hass.async_block_till_done()
+
+        latest = observer.runtime.operations.latest_homeowner
+        assert latest is not None
+        assert latest["group_id"] == aggregate
+        assert latest["reason"] == "released_to_hlm"
+        assert tuple(latest["affected"]) == tuple(sorted(leaves))
+        assert all(observer.runtime.engine.resolve(entity).layer is None for entity in leaves)
+        attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
+        assert tuple(attrs["group_off_sequences"][aggregate]) == tuple(sorted(leaves))
+        assert unmanaged not in attrs["reconciliation_protected_entities"]
+
+        daily_context = Context(parent_id="daily-render")
+        for entity in leaves:
+            hass.states.async_set(
+                entity,
+                "on",
+                {"brightness": 180, "dynamics": "none"},
+                context=daily_context,
+            )
+        hass.states.async_set(
+            aggregate,
+            "on",
+            {"entity_id": [*leaves, unmanaged]},
+            context=daily_context,
+        )
+        await hass.async_block_till_done()
+
+        second = first + timedelta(seconds=10)
+        with patch(
+            "custom_components.home_lighting_manager.promotion_observer.dt_util.now",
+            return_value=second,
+        ):
+            for entity in leaves:
+                hass.states.async_set(entity, "off", {"dynamics": "none"})
+                await hass.async_block_till_done()
+            hass.states.async_set(
+                aggregate,
+                "off",
+                {"entity_id": [*leaves, unmanaged]},
+            )
+            await hass.async_block_till_done()
+
+        latest = observer.runtime.operations.latest_homeowner
+        assert latest is not None
+        assert latest["group_id"] == aggregate
+        assert latest["reason"] == "created_group_manual_off"
+        assert tuple(latest["affected"]) == tuple(sorted(leaves))
+        for entity in leaves:
+            layer = observer.runtime.engine.resolve(entity).layer
+            assert layer is not None
+            assert layer.kind is LayerKind.MANUAL_OFF
+            assert layer.group_id == aggregate
+        attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
+        assert set(leaves).issubset(set(attrs["reconciliation_protected_entities"]))
+        assert unmanaged not in attrs["reconciliation_protected_entities"]
+        assert attrs["command_authority"] is False
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_front_eve_managed_subset_preserves_single_member_safety_with_unmanaged_extra(
+    tmp_path,
+):
+    """An unmanaged Hue member must not turn Front Eve propagation into fake corroboration."""
+    leaf = "light.front_yard_front_eve_lights"
+    aggregate = "light.front_eve_zone"
+    unmanaged = "light.front_eve_unmanaged_decorative"
+    hass, observer = await observer_for(tmp_path, [leaf, aggregate])
+    try:
+        await seed_group(hass, aggregate, (leaf, unmanaged), state="on")
+        hass.states.async_set("input_boolean.home_lighting_ha_guard_front_eve", "off")
+        await hass.async_block_till_done()
+
+        hass.states.async_set(
+            leaf,
+            "on",
+            {"brightness": 101, "dynamics": "none"},
+        )
+        await hass.async_block_till_done()
+        hass.states.async_set(
+            aggregate,
+            "on",
+            {"entity_id": [leaf, unmanaged], "brightness": 101},
+        )
+        await hass.async_block_till_done()
+
+        assert observer.runtime.operations.latest_homeowner is None
+        assert observer.runtime.engine.resolve(leaf).layer is None
+        attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
+        assert attrs["command_authority"] is False
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_exact_group_correlation_projects_out_unmanaged_hue_members(tmp_path):
+    """Generic context-less exact-group promotion uses the HLM-managed subset."""
+    leaves = ("light.generic_managed_a", "light.generic_managed_b")
+    aggregate = "light.generic_surface"
+    unmanaged = "light.generic_unmanaged_decorative"
+    hass, observer = await observer_for(tmp_path, [*leaves, aggregate])
+    try:
+        await seed_group(hass, aggregate, (*leaves, unmanaged), state="on")
+
+        for index, leaf in enumerate(leaves):
+            hass.states.async_set(
+                leaf,
+                "on",
+                {"brightness": 120 + index, "dynamics": "none"},
+            )
+            await hass.async_block_till_done()
+        hass.states.async_set(
+            aggregate,
+            "on",
+            {"entity_id": [*leaves, unmanaged]},
+        )
+        await hass.async_block_till_done()
+
+        latest = observer.runtime.operations.latest_homeowner
+        assert latest is not None
+        assert latest["group_id"] == aggregate
+        assert latest["kind"] == "appearance"
+        assert tuple(latest["affected"]) == tuple(sorted(leaves))
+        assert unmanaged not in latest["requested"]
+        assert observer.runtime.engine.resolve(leaves[0]).layer.kind is LayerKind.MANUAL
+        assert observer.runtime.engine.resolve(leaves[1]).layer.kind is LayerKind.MANUAL
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()

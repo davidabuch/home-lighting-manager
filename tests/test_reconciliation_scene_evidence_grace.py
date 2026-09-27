@@ -1,7 +1,6 @@
 from copy import deepcopy
 
 import pytest
-
 from custom_components.home_lighting_reconciliation.engine import Check
 from custom_components.home_lighting_reconciliation.runtime import Reconciler
 

@@ -1481,3 +1481,197 @@ async def test_displaced_backyard_scene_can_correlate_preceding_leaf_fanout(tmp_
     finally:
         await observer.async_shutdown()
         await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("recall_sensor", "group_id", "guard_id", "sync_id", "leaves"),
+    (
+        (
+            "sensor.main_area_last_recall",
+            "light.holiday_main_area",
+            "input_boolean.home_lighting_ha_guard_main_area",
+            "binary_sensor.hue_bridge_living_room",
+            ("light.universal_main_a", "light.universal_main_b"),
+        ),
+        (
+            "sensor.path_last_recall",
+            "light.holiday_path",
+            "input_boolean.home_lighting_ha_guard_path",
+            None,
+            ("light.universal_path_a", "light.universal_path_b"),
+        ),
+        (
+            "sensor.front_eve_last_recall",
+            "light.front_eve_zone",
+            "input_boolean.home_lighting_ha_guard_front_eve",
+            None,
+            ("light.universal_front_eve",),
+        ),
+        (
+            "sensor.backyard_last_recall",
+            "light.holiday_backyard",
+            "input_boolean.home_lighting_ha_guard_backyard",
+            "binary_sensor.hue_bridge_backyard",
+            (
+                "light.universal_backyard_a",
+                "light.universal_backyard_b",
+                "light.universal_backyard_c",
+            ),
+        ),
+    ),
+)
+async def test_all_surfaces_use_managed_subset_for_first_and_second_group_off(
+    tmp_path,
+    recall_sensor,
+    group_id,
+    guard_id,
+    sync_id,
+    leaves,
+):
+    """Raw Hue extras must never break the universal managed-surface OFF contract."""
+    from datetime import timedelta
+
+    from homeassistant.core import Context
+    from homeassistant.util import dt as dt_util
+
+    unmanaged_extra = f"{group_id}_unmanaged_extra"
+    observer = PromotingHomeAssistantShadowObserver(
+        HomeAssistant(str(tmp_path)),
+        [*leaves, group_id],
+        {},
+    )
+    hass = observer.hass
+    hass.config.time_zone = "America/Los_Angeles"
+    await observer.async_start()
+    try:
+        for index, leaf in enumerate(leaves):
+            hass.states.async_set(
+                leaf,
+                "on",
+                {"brightness": 120 + index, "dynamics": "none"},
+                context=Context(parent_id="seed"),
+            )
+        hass.states.async_set(
+            unmanaged_extra,
+            "on",
+            {"brightness": 99, "dynamics": "none"},
+            context=Context(parent_id="seed"),
+        )
+        await seed_group(
+            hass,
+            group_id,
+            (*leaves, unmanaged_extra),
+            state="on",
+        )
+        hass.states.async_set(guard_id, "off")
+        if sync_id is not None:
+            hass.states.async_set(sync_id, "off")
+        await hass.async_block_till_done()
+
+        old = dt_util.now() - timedelta(minutes=5)
+        recalled = dt_util.now()
+        hass.states.async_set(
+            recall_sensor,
+            old.isoformat(),
+            {"scene_name": "Automatic baseline", "scene_id": "old-scene"},
+        )
+        await hass.async_block_till_done()
+        hass.states.async_set(
+            recall_sensor,
+            recalled.isoformat(),
+            {"scene_name": "Homeowner scene", "scene_id": "manual-scene"},
+        )
+        await hass.async_block_till_done()
+
+        assert all(
+            observer.runtime.engine.resolve(entity).layer is not None
+            and observer.runtime.engine.resolve(entity).layer.kind is LayerKind.MANUAL
+            and observer.runtime.engine.resolve(entity).layer.group_id == group_id
+            for entity in leaves
+        )
+        assert unmanaged_extra not in observer.entity_ids
+
+        first = recalled + timedelta(seconds=3)
+        with patch(
+            "custom_components.home_lighting_manager.promotion_observer.dt_util.now",
+            return_value=first,
+        ):
+            for leaf in leaves:
+                hass.states.async_set(leaf, "off", {"dynamics": "none"})
+                await hass.async_block_till_done()
+            hass.states.async_set(unmanaged_extra, "off", {"dynamics": "none"})
+            hass.states.async_set(
+                group_id,
+                "off",
+                {"entity_id": [*leaves, unmanaged_extra]},
+            )
+            await hass.async_block_till_done()
+
+        latest = observer.runtime.operations.latest_homeowner
+        assert latest is not None
+        assert latest["group_id"] == group_id
+        assert latest["reason"] == "released_to_hlm"
+        assert tuple(latest["affected"]) == tuple(sorted(leaves))
+        assert all(observer.runtime.engine.resolve(entity).layer is None for entity in leaves)
+        assert tuple(observer.runtime.engine.group_off_sequences()[group_id]) == tuple(
+            sorted(leaves)
+        )
+
+        daily = Context(parent_id="daily-render")
+        for leaf in leaves:
+            hass.states.async_set(
+                leaf,
+                "on",
+                {"brightness": 180, "dynamics": "none"},
+                context=daily,
+            )
+        hass.states.async_set(
+            unmanaged_extra,
+            "on",
+            {"brightness": 180, "dynamics": "none"},
+            context=daily,
+        )
+        hass.states.async_set(
+            group_id,
+            "on",
+            {"entity_id": [*leaves, unmanaged_extra]},
+            context=daily,
+        )
+        await hass.async_block_till_done()
+
+        second = first + timedelta(seconds=10)
+        with patch(
+            "custom_components.home_lighting_manager.promotion_observer.dt_util.now",
+            return_value=second,
+        ):
+            for leaf in leaves:
+                hass.states.async_set(leaf, "off", {"dynamics": "none"})
+                await hass.async_block_till_done()
+            hass.states.async_set(unmanaged_extra, "off", {"dynamics": "none"})
+            hass.states.async_set(
+                group_id,
+                "off",
+                {"entity_id": [*leaves, unmanaged_extra]},
+            )
+            await hass.async_block_till_done()
+
+        latest = observer.runtime.operations.latest_homeowner
+        assert latest is not None
+        assert latest["group_id"] == group_id
+        assert latest["reason"] == "created_group_manual_off"
+        assert tuple(latest["affected"]) == tuple(sorted(leaves))
+        for leaf in leaves:
+            layer = observer.runtime.engine.resolve(leaf).layer
+            assert layer is not None
+            assert layer.kind is LayerKind.MANUAL_OFF
+            assert layer.group_id == group_id
+        assert unmanaged_extra not in set(
+            hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes[
+                "reconciliation_protected_entities"
+            ]
+        )
+        assert hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes["command_authority"] is False
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()

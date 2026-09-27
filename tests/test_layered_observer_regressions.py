@@ -1178,7 +1178,7 @@ async def test_displaced_backyard_scene_with_broad_surface_burst_creates_exact_m
 
         attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
         assert set(attrs["reconciliation_protected_entities"]) == set(leaves)
-        assert attrs["precedence_configured_entities"] == 0
+        assert attrs["precedence_configured_entities"] == len(leaves)
         assert attrs["command_authority"] is False
     finally:
         await observer.async_shutdown()

@@ -408,6 +408,65 @@ async def test_hlm_manual_off_projection_blocks_daily_turn_on(rig):
     assert not any(command.entity == entity for command in check.commands)
 
 @pytest.mark.asyncio
+async def test_backyard_eve_49ers_overlay_excludes_festavia_from_off_repair(rig):
+    a, args = adapter_for(rig)
+    festavia = "light.festavia_permanent_1"
+    rig.set("sensor.nfl_san_francisco_49ers", "IN")
+    rig.set("binary_sensor.hue_bridge_backyard", "off")
+    rig.set("input_boolean.home_lighting_manual_backyard", "off")
+    rig.set("input_boolean.spa_gauge_active", "off")
+    rig.set("input_boolean.home_lighting_backyard_window", "off")
+    rig.set(festavia, "on", {})
+    for entity in args[3]["backyard"]:
+        if entity != festavia:
+            rig.set(entity, "off", {})
+
+    check, owners = await a.inspect()
+
+    assert owners["backyard"]["owner"] == "off"
+    assert festavia in owners["backyard"]["excluded_entities"]
+    assert not any(command.entity == festavia for command in check.commands)
+    assert not any(
+        issue.get("entity") == festavia and "difference" in issue
+        for issue in check.issues
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("entity_id", "state"),
+    (
+        ("sensor.nfl_san_francisco_49ers", "POST"),
+        ("binary_sensor.hue_bridge_backyard", "on"),
+        ("input_boolean.home_lighting_manual_backyard", "on"),
+        ("input_boolean.spa_gauge_active", "on"),
+    ),
+)
+async def test_backyard_eve_49ers_overlay_exclusion_requires_all_gates(rig, entity_id, state):
+    a, args = adapter_for(rig)
+    festavia = "light.festavia_permanent_1"
+    rig.set("sensor.nfl_san_francisco_49ers", "IN")
+    rig.set("binary_sensor.hue_bridge_backyard", "off")
+    rig.set("input_boolean.home_lighting_manual_backyard", "off")
+    rig.set("input_boolean.spa_gauge_active", "off")
+    rig.set("input_boolean.home_lighting_backyard_window", "off")
+    rig.set(entity_id, state)
+    rig.set(festavia, "on", {})
+    for entity in args[3]["backyard"]:
+        if entity != festavia:
+            rig.set(entity, "off", {})
+
+    check, owners = await a.inspect()
+
+    assert festavia not in owners["backyard"].get("excluded_entities", [])
+    assert any(command.entity == festavia for command in check.commands)
+    assert any(
+        issue.get("entity") == festavia and "difference" in issue
+        for issue in check.issues
+    )
+
+
+@pytest.mark.asyncio
 async def test_adapter_minimal_repair_uses_guard_without_asserting_manual(rig):
     a, args = adapter_for(rig)
     entity = "light.kitchen_kitchen_right_cabinet_lights"

@@ -46,3 +46,5 @@ GROUP_ALIASES = {
     "path": ("light.holiday_path", "light.driveway_path_lights"),
     "backyard": ("light.holiday_backyard", "light.backyard"),
 }
+
+SCENE_EVIDENCE_PENDING = "different or unknown latest recall; possible Manual intent"

@@ -21,6 +21,8 @@ from .runtime import Reconciler
 
 _LOGGER = logging.getLogger(__name__)
 
+BACKYARD_EVE_49ERS_ENTITY = "light.festavia_permanent_1"
+
 CONFIG_SCHEMA = vol.Schema({vol.Optional(DOMAIN): vol.Schema({})}, extra=vol.ALLOW_EXTRA)
 
 
@@ -147,6 +149,29 @@ class Adapter:
     def with_hlm_protection(self, owners, members):
         return project_owners(self.hass, owners, members)
 
+    def with_legacy_overlay_exclusions(self, owners):
+        """Exclude leaves intentionally owned by legacy overlay families."""
+        result = {key: dict(value) if isinstance(value, dict) else value for key, value in owners.items()}
+        game = self.hass.states.get("sensor.nfl_san_francisco_49ers")
+        sync = self.hass.states.get("binary_sensor.hue_bridge_backyard")
+        manual = self.hass.states.get("input_boolean.home_lighting_manual_backyard")
+        spa = self.hass.states.get("input_boolean.spa_gauge_active")
+        active = (
+            game is not None
+            and game.state == "IN"
+            and sync is not None
+            and sync.state == "off"
+            and manual is not None
+            and manual.state == "off"
+            and spa is not None
+            and spa.state == "off"
+        )
+        if active and "backyard" in result:
+            excluded = set(result["backyard"].get("excluded_entities", ()))
+            excluded.add(BACKYARD_EVE_49ERS_ENTITY)
+            result["backyard"]["excluded_entities"] = sorted(excluded)
+        return result
+
     def with_scene_monitor_corroboration(self, owners, metadata):
         """Accept exact active scene-monitor evidence when raw Hue latest lags."""
         result = {
@@ -200,10 +225,12 @@ class Adapter:
         self.last_evidence = members, metadata
         self.known_members.update(entity for group in members.values() for entity in group)
         owners = self.with_hlm_protection(owners, members)
+        owners = self.with_legacy_overlay_exclusions(owners)
         metadata = self.with_scene_monitor_corroboration(owners, metadata)
         # Network waits can span a new ownership event. Resolve again and never use
         # old metadata for new owners; the generation loop also invalidates this pass.
         current = self.with_hlm_protection(await self.owners(), members)
+        current = self.with_legacy_overlay_exclusions(current)
         metadata = self.with_scene_monitor_corroboration(current, metadata)
         if current != owners:
             blocked = {s: "ownership changed during inspection" for s in SURFACES}
@@ -251,6 +278,7 @@ class Adapter:
         )
         # Final live checks after guard activation. No network IO here.
         current = self.with_hlm_protection(await self.owners(), members)
+        current = self.with_legacy_overlay_exclusions(current)
         if (
             not valid()
             or current != owners
@@ -275,6 +303,7 @@ class Adapter:
             try:
                 async def still_current():
                     latest = self.with_hlm_protection(await self.owners(), members)
+                    latest = self.with_legacy_overlay_exclusions(latest)
                     return valid() and latest == owners and not self.suppression().get(command.surface)
 
                 await self.hue.apply_actions(

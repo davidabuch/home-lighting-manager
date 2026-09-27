@@ -408,6 +408,107 @@ async def test_hlm_manual_off_projection_blocks_daily_turn_on(rig):
     assert not any(command.entity == entity for command in check.commands)
 
 @pytest.mark.asyncio
+async def test_backyard_eve_49ers_overlay_excludes_festavia_from_off_repair(rig):
+    a, args = adapter_for(rig)
+    festavia = "light.festavia_permanent_1"
+    members = {surface: list(items) for surface, items in args[3].items()}
+    if festavia not in members["backyard"]:
+        members["backyard"].append(festavia)
+
+    async def read(_scenes, _surfaces):
+        return members, args[4]
+
+    a.hue.read = read
+    rig.set("sensor.nfl_san_francisco_49ers", "IN")
+    rig.set("binary_sensor.hue_bridge_backyard", "off")
+    rig.set("input_boolean.home_lighting_manual_backyard", "off")
+    rig.set("input_boolean.spa_gauge_active", "off")
+    rig.set("input_boolean.home_lighting_backyard_window", "off")
+    rig.set(festavia, "on", {})
+    for entity in members["backyard"]:
+        if entity != festavia:
+            rig.set(entity, "off", {})
+
+    check, owners = await a.inspect()
+
+    assert owners["backyard"]["owner"] == "off"
+    assert festavia in owners["backyard"]["excluded_entities"]
+    assert not any(command.entity == festavia for command in check.commands)
+    assert not any(
+        issue.get("entity") == festavia and "difference" in issue
+        for issue in check.issues
+    )
+
+
+@pytest.mark.asyncio
+async def test_backyard_eve_49ers_overlay_exclusion_ends_with_game(rig):
+    a, args = adapter_for(rig)
+    festavia = "light.festavia_permanent_1"
+    members = {surface: list(items) for surface, items in args[3].items()}
+    if festavia not in members["backyard"]:
+        members["backyard"].append(festavia)
+
+    async def read(_scenes, _surfaces):
+        return members, args[4]
+
+    a.hue.read = read
+    rig.set("sensor.nfl_san_francisco_49ers", "POST")
+    rig.set("binary_sensor.hue_bridge_backyard", "off")
+    rig.set("input_boolean.home_lighting_manual_backyard", "off")
+    rig.set("input_boolean.spa_gauge_active", "off")
+    rig.set("input_boolean.home_lighting_backyard_window", "off")
+    rig.set(festavia, "on", {})
+    for entity in members["backyard"]:
+        if entity != festavia:
+            rig.set(entity, "off", {})
+
+    check, owners = await a.inspect()
+
+    assert festavia not in owners["backyard"].get("excluded_entities", [])
+    assert any(command.entity == festavia for command in check.commands)
+    assert any(
+        issue.get("entity") == festavia and "difference" in issue
+        for issue in check.issues
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("entity_id", "state", "expected_owner"),
+    (
+        ("binary_sensor.hue_bridge_backyard", "on", "sync"),
+        ("input_boolean.home_lighting_manual_backyard", "on", "manual"),
+        ("input_boolean.spa_gauge_active", "on", "spa"),
+    ),
+)
+async def test_backyard_eve_49ers_overlay_exclusion_yields_to_higher_owner(
+    rig, entity_id, state, expected_owner
+):
+    a, args = adapter_for(rig)
+    festavia = "light.festavia_permanent_1"
+    members = {surface: list(items) for surface, items in args[3].items()}
+    if festavia not in members["backyard"]:
+        members["backyard"].append(festavia)
+
+    async def read(_scenes, _surfaces):
+        return members, args[4]
+
+    a.hue.read = read
+    rig.set("sensor.nfl_san_francisco_49ers", "IN")
+    rig.set("binary_sensor.hue_bridge_backyard", "off")
+    rig.set("input_boolean.home_lighting_manual_backyard", "off")
+    rig.set("input_boolean.spa_gauge_active", "off")
+    rig.set(entity_id, state)
+    rig.set(festavia, "on", {})
+
+    check, owners = await a.inspect()
+
+    assert owners["backyard"]["owner"] == expected_owner
+    assert festavia not in owners["backyard"].get("excluded_entities", [])
+    assert check.skipped["backyard"] == expected_owner
+
+
+@pytest.mark.asyncio
 async def test_adapter_minimal_repair_uses_guard_without_asserting_manual(rig):
     a, args = adapter_for(rig)
     entity = "light.kitchen_kitchen_right_cabinet_lights"

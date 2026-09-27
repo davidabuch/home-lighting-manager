@@ -213,6 +213,14 @@ class ShadowRuntime:
         """Record family suppression produced by shadow ownership evaluation."""
         self.engine.suppress_family(family, session_id, reason)
 
+    def reset_homeowner_control(self) -> dict[str, int]:
+        """Clear homeowner/session suppression state and invalidate pre-reset operations."""
+        result = self.engine.reset_homeowner_control()
+        self.operations = OwnershipOperations(self.engine)
+        self._qualified_ids.clear()
+        self._recovery_open = False
+        return result
+
     def managed_entities(self) -> tuple[str, ...]:
         """Return entities with any current-generation shadow ownership state."""
         return self.engine.entity_ids()

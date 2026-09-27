@@ -69,6 +69,7 @@ def publish(rig, runtime, members):
             "command_authority": False,
             "manual_precedence_entities": list(members),
             "reconciliation_protected_entities": runtime.reconciliation_protected_entities(),
+            "last_mutation_reason": runtime.engine.last_mutation_reason,
             "effective_ownership": effective_ownership(
                 runtime.engine,
                 members,

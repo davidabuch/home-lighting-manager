@@ -44,11 +44,18 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     async def async_mark_command_consequence(call: ServiceCall) -> None:
         entity_ids = call.data.get("entity_ids", ())
         guard_entity = call.data.get("guard_entity")
+        operation = call.data.get("operation")
         if isinstance(entity_ids, str):
             entity_ids = [entity_ids]
-        if not isinstance(entity_ids, (list, tuple)) or not isinstance(guard_entity, str):
+        if (
+            not isinstance(entity_ids, (list, tuple))
+            or not isinstance(guard_entity, str)
+            or operation not in ("appearance", "off")
+        ):
             raise ValueError("Invalid renderer attribution payload")
-        accepted = observer.register_renderer_command_consequences(entity_ids, guard_entity)
+        accepted = observer.register_renderer_command_consequences(
+            entity_ids, guard_entity, operation
+        )
         if accepted != len(entity_ids):
             raise ValueError("Renderer attribution rejected one or more entities")
 

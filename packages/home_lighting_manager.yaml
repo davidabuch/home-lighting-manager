@@ -269,8 +269,15 @@ script:
           {% endif %}
         {% endfor %}
         {{ ns.entities }}
-      hlm_effective_ownership: "{{ state_attr('sensor.home_lighting_manager_shadow_health', 'effective_ownership') or {} }}"
-      hlm_managed_groups: "{{ hlm_effective_ownership.get('groups', {}) }}"
+      hlm_front_eve_managed: >-
+        {% set projection = state_attr('sensor.home_lighting_manager_shadow_health', 'effective_ownership') %}
+        {{ projection is mapping and 'light.front_eve_zone' in projection.get('groups', {}) }}
+      hlm_path_managed: >-
+        {% set projection = state_attr('sensor.home_lighting_manager_shadow_health', 'effective_ownership') %}
+        {{ projection is mapping and 'light.holiday_path' in projection.get('groups', {}) }}
+      hlm_backyard_managed: >-
+        {% set projection = state_attr('sensor.home_lighting_manager_shadow_health', 'effective_ownership') %}
+        {{ projection is mapping and 'light.holiday_backyard' in projection.get('groups', {}) }}
       manual_front_eve_active: '{{ is_state(''input_boolean.home_lighting_manual_front_eve'', ''on'')
         }}'
       liquor_cabinet_open: |-
@@ -331,19 +338,18 @@ script:
         if game_live else 'holiday' if holiday_active and holiday_main_scene else 'daily' if main_area_baseline_eligible
         else 'off' }}
       owner_front_eve: >-
-        {{ 'manual' if manual_front_eve_active and 'light.front_eve_zone' not in hlm_managed_groups else '49ers' if game_live else 'holiday' if holiday_active
+        {{ 'manual' if manual_front_eve_active and not hlm_front_eve_managed else '49ers' if game_live else 'holiday' if holiday_active
         and holiday_eve_scene else 'daily' if front_eve_baseline_eligible else 'off' }}
       owner_path: >-
-        {{ 'manual' if is_state('input_boolean.home_lighting_manual_path', 'on') and 'light.holiday_path' not in hlm_managed_groups else 'holiday' if
+        {{ 'manual' if is_state('input_boolean.home_lighting_manual_path', 'on') and not hlm_path_managed else 'holiday' if
         holiday_active and holiday_path_scene else 'daily' if is_state('input_boolean.home_lighting_path_window',
         'on') else 'off' }}
       owner_backyard: >-
         {{ 'sync' if is_state('binary_sensor.hue_bridge_backyard', 'on') else 'manual' if is_state('input_boolean.home_lighting_manual_backyard',
-        'on') and 'light.holiday_backyard' not in hlm_managed_groups else 'spa' if is_state('input_boolean.spa_gauge_active', 'on') else 'holiday' if holiday_active
+        'on') and not hlm_backyard_managed else 'spa' if is_state('input_boolean.spa_gauge_active', 'on') else 'holiday' if holiday_active
         and holiday_backyard_scene else 'daily' if is_state('input_boolean.home_lighting_backyard_window',
         'on') else 'off' }}
       owners:
-        hlm_effective_ownership: "{{ hlm_effective_ownership }}"
         main_area:
           owner: '{{ owner_main_area }}'
           scene: '{{ ''scene.holiday_main_area_49ers'' if owner_main_area == ''49ers'' else holiday_main_scene

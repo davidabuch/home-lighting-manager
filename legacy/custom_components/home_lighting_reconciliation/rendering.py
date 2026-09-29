@@ -142,8 +142,8 @@ def project_owners(hass, owners, members):
 
 
 
-async def mark_command_consequence(hass, entities, guard_entity):
-    """Register exact renderer targets with HLM before physical dispatch."""
+async def mark_command_consequence(hass, entities, guard_entity, operation):
+    """Register exact renderer targets and operation before physical dispatch."""
     targets = sorted(set(entities))
     if not targets:
         return
@@ -152,9 +152,33 @@ async def mark_command_consequence(hass, entities, guard_entity):
     await hass.services.async_call(
         HLM_DOMAIN,
         "mark_command_consequence",
-        {"entity_ids": targets, "guard_entity": guard_entity},
+        {
+            "entity_ids": targets,
+            "guard_entity": guard_entity,
+            "operation": operation,
+        },
         blocking=True,
     )
+
+def action_operation(action):
+    """Project one Hue action into HLM's appearance/off operation vocabulary."""
+    on = action.get("action", {}).get("on", {}).get("on")
+    return "off" if on is False else "appearance"
+
+
+async def mark_scene_targets(hass, actions, targets, guard_entity):
+    """Mark scene targets by the operation each Hue action will produce."""
+    for operation in ("appearance", "off"):
+        selected = {
+            entity
+            for entity in targets
+            if action_operation(actions[entity]) == operation
+        }
+        if selected:
+            await mark_command_consequence(
+                hass, selected, guard_entity, operation
+            )
+
 
 async def render(adapter, surface, service, entities, parameters, context, expected_owner=None):
     """Filter one legacy renderer request immediately before physical dispatch."""
@@ -266,7 +290,7 @@ async def render(adapter, surface, service, entities, parameters, context, expec
                     (s := hass.states.get(e)) and s.state not in ("unknown", "unavailable")
                     for e in actions
                 ):
-                    await mark_command_consequence(hass, targets, guard_entity)
+                    await mark_scene_targets(hass, actions, targets, guard_entity)
                     await hass.services.async_call(
                         "scene",
                         "turn_on",
@@ -276,7 +300,7 @@ async def render(adapter, surface, service, entities, parameters, context, expec
                     )
                     adapter.render_note(surface, "native_scene", [scene])
             else:
-                await mark_command_consequence(hass, targets, guard_entity)
+                await mark_scene_targets(hass, actions, targets, guard_entity)
                 applied = await adapter.hue.apply_actions(
                     info, protected=set(actions) - targets, valid=valid
                 )
@@ -299,7 +323,10 @@ async def render(adapter, surface, service, entities, parameters, context, expec
                 return
             if entity not in eligible():
                 continue
-            await mark_command_consequence(hass, [entity], guard_entity)
+            operation = "off" if service == "light.turn_off" else "appearance"
+            await mark_command_consequence(
+                hass, [entity], guard_entity, operation
+            )
             domain, action = service.split(".")
             await hass.services.async_call(
                 domain, action, {"entity_id": entity, **parameters}, blocking=True, context=context

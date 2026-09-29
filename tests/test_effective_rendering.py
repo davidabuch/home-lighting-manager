@@ -58,13 +58,6 @@ def setup(rig, surface, owner="daily"):
             rig.set(entity, "on" if action["action"]["on"]["on"] else "off")
 
     rig.hass.services.async_register("scene", "turn_on", physical_scene)
-
-    async def mark_command_consequence(call):
-        rig.calls.append(("home_lighting_manager.mark_command_consequence", dict(call.data)))
-
-    rig.hass.services.async_register(
-        "home_lighting_manager", "mark_command_consequence", mark_command_consequence
-    )
     return runtime, members
 
 

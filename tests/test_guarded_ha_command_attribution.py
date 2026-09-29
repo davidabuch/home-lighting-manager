@@ -1,5 +1,8 @@
+from datetime import timedelta
+
 import pytest
 from homeassistant.core import Context, HomeAssistant
+from homeassistant.util import dt as dt_util
 
 from custom_components.home_lighting_manager.ha_observer import (
     MANAGED_SURFACE_GROUPS,
@@ -104,3 +107,29 @@ async def test_guard_does_not_swallow_unattributed_external_hue_event(tmp_path):
     guarded = observer._apply_ha_guard_attribution(ENTITY, observation)
     assert guarded.evidence.kind is IntentEvidenceKind.UNKNOWN
     assert guarded.evidence.attribution_source is IntentAttributionSource.UNATTRIBUTED_EXTERNAL
+
+
+@pytest.mark.asyncio
+async def test_renderer_marker_expires_and_cannot_resurrect_across_guard_cycles(tmp_path, monkeypatch):
+    hass = HomeAssistant(str(tmp_path))
+    hass.states.async_set(GUARD, "on")
+    hass.states.async_set(ENTITY, "on")
+    observer = make_observer(hass)
+
+    t0 = dt_util.now()
+    monkeypatch.setattr(
+        "custom_components.home_lighting_manager.ha_observer.dt_util.now",
+        lambda: t0,
+    )
+    assert observer.register_renderer_command_consequences([ENTITY], GUARD, "off") == 1
+    assert observer._active_guard_for_ha_consequence(ENTITY, "off") == GUARD
+    assert observer._active_guard_for_ha_consequence(ENTITY, "appearance") is None
+
+    hass.states.async_set(GUARD, "off")
+    hass.states.async_set(GUARD, "on")
+    monkeypatch.setattr(
+        "custom_components.home_lighting_manager.ha_observer.dt_util.now",
+        lambda: t0 + timedelta(seconds=2.1),
+    )
+    assert observer._active_guard_for_ha_consequence(ENTITY, "off") is None
+    assert ENTITY not in observer._guarded_ha_consequence_entities

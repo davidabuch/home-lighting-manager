@@ -63,6 +63,7 @@ RUNTIME_DATA_KEY = f"{DOMAIN}_shadow_runtime"
 DIAGNOSTIC_ENTITY_ID = "sensor.home_lighting_manager_shadow_health"
 EVIDENCE_LEDGER_SIZE = 12
 EXTERNAL_BURST_WINDOW_SECONDS = 2.0
+RENDERER_ATTRIBUTION_TTL_SECONDS = EXTERNAL_BURST_WINDOW_SECONDS
 NIGHTLY_BOUNDARY_SETTLE_SECONDS = 15.0
 
 CONFIG_SCHEMA = vol.Schema(
@@ -121,7 +122,7 @@ class HomeAssistantShadowObserver:
         self._topology_members: dict[str, tuple[str, ...]] = {}
         self._nightly_boundary_settle_until: datetime | None = None
         self._post_boundary_off_entities: set[str] = set()
-        self._guarded_ha_consequence_entities: dict[str, tuple[str, str]] = {}
+        self._guarded_ha_consequence_entities: dict[str, tuple[str, str, datetime]] = {}
 
     async def async_start(self) -> None:
         """Load trusted evidence and begin observation without command authority."""
@@ -292,7 +293,11 @@ class HomeAssistantShadowObserver:
             guard = MANAGED_SURFACE_GUARDS[surface]
             if not self.hass.states.is_state(guard, STATE_ON):
                 return observation
-            self._guarded_ha_consequence_entities[entity_id] = (guard, observation.operation)
+            self._guarded_ha_consequence_entities[entity_id] = (
+                guard,
+                observation.operation,
+                dt_util.now(),
+            )
             return replace(
                 observation,
                 evidence=replace(
@@ -331,7 +336,11 @@ class HomeAssistantShadowObserver:
         accepted = 0
         for entity_id in entity_ids:
             if isinstance(entity_id, str) and entity_id in members:
-                self._guarded_ha_consequence_entities[entity_id] = (guard_entity, operation)
+                self._guarded_ha_consequence_entities[entity_id] = (
+                    guard_entity,
+                    operation,
+                    dt_util.now(),
+                )
                 accepted += 1
         return accepted
 
@@ -343,7 +352,11 @@ class HomeAssistantShadowObserver:
         marker = self._guarded_ha_consequence_entities.get(entity_id)
         if marker is None:
             return None
-        guard_id, marked_operation = marker
+        guard_id, marked_operation, created_at = marker
+        age = (dt_util.now() - created_at).total_seconds()
+        if age < 0 or age > RENDERER_ATTRIBUTION_TTL_SECONDS:
+            self._guarded_ha_consequence_entities.pop(entity_id, None)
+            return None
         if not self.hass.states.is_state(guard_id, STATE_ON):
             self._guarded_ha_consequence_entities.pop(entity_id, None)
             return None

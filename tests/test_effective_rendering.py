@@ -524,29 +524,33 @@ async def test_obsolete_scene_cannot_run_under_same_owner_after_holiday_changes(
 async def test_renderer_marks_each_leaf_before_physical_light_dispatch(rig):
     runtime, members = setup(rig, "backyard", "off")
     rig.set("input_boolean.home_lighting_backyard_window", "off")
+    for entity in members:
+        rig.set(entity, "on")
     publish(rig, runtime, members)
-    target = members[0]
-    rig.set(target, "on")
     rig.calls.clear()
+
     await rig.hass.services.async_call(
         "home_lighting_reconciliation",
         "render",
         {
             "surface": "backyard",
             "command": "light.turn_off",
-            "entity_id": target,
-            "parameters": {},
+            "entity_id": "light.backyard",
+            "parameters": {"transition": 0},
         },
         blocking=True,
     )
-    mark_indexes = [
-        i for i, (service, data) in enumerate(rig.calls)
-        if service == "home_lighting_manager.mark_command_consequence"
-        and target in data.get("entity_ids", [])
+
+    physical = [
+        (i, data["entity_id"])
+        for i, (service, data) in enumerate(rig.calls)
+        if service == "light.turn_off" and isinstance(data.get("entity_id"), str)
     ]
-    light_indexes = [
-        i for i, (service, data) in enumerate(rig.calls)
-        if service == "light.turn_off" and data.get("entity_id") == target
-    ]
-    assert mark_indexes and light_indexes
-    assert mark_indexes[0] < light_indexes[0]
+    assert physical
+    for light_index, entity in physical:
+        assert any(
+            i < light_index
+            and service == "home_lighting_manager.mark_command_consequence"
+            and entity in data.get("entity_ids", [])
+            for i, (service, data) in enumerate(rig.calls)
+        )

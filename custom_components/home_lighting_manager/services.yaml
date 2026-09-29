@@ -7,6 +7,7 @@ reset_ownership:
 
 mark_command_consequence:
   name: Mark HLM command consequence
+  target: {}
   description: >-
     Internal attribution handshake used by the legacy renderer to identify exact
     managed leaves that are about to receive an HA-owned lighting command.

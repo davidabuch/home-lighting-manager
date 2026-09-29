@@ -149,6 +149,7 @@ async def rig(tmp_path):
         "input_text": ["set_value"],
         "input_number": ["set_value"],
         "automation": ["trigger", "turn_on", "turn_off"],
+        "home_lighting_manager": ["mark_command_consequence"],
     }.items():
         for service in services:
             hass.services.async_register(domain, service, rig.service)

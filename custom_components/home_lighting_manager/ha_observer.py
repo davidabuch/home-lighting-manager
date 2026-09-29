@@ -121,7 +121,7 @@ class HomeAssistantShadowObserver:
         self._topology_members: dict[str, tuple[str, ...]] = {}
         self._nightly_boundary_settle_until: datetime | None = None
         self._post_boundary_off_entities: set[str] = set()
-        self._guarded_ha_consequence_entities: dict[str, str] = {}
+        self._guarded_ha_consequence_entities: dict[str, tuple[str, str]] = {}
 
     async def async_start(self) -> None:
         """Load trusted evidence and begin observation without command authority."""
@@ -292,7 +292,7 @@ class HomeAssistantShadowObserver:
             guard = MANAGED_SURFACE_GUARDS[surface]
             if not self.hass.states.is_state(guard, STATE_ON):
                 return observation
-            self._guarded_ha_consequence_entities[entity_id] = guard
+            self._guarded_ha_consequence_entities[entity_id] = (guard, observation.operation)
             return replace(
                 observation,
                 evidence=replace(
@@ -306,7 +306,7 @@ class HomeAssistantShadowObserver:
 
     @callback
     def register_renderer_command_consequences(
-        self, entity_ids: Iterable[str], guard_entity: str
+        self, entity_ids: Iterable[str], guard_entity: str, operation: str
     ) -> int:
         """Register exact leaves the legacy renderer is about to command.
 
@@ -314,6 +314,8 @@ class HomeAssistantShadowObserver:
         dispatches a lighting command. The marker is accepted only for canonical
         members of the surface corresponding to the currently active guard.
         """
+        if operation not in ("appearance", "off"):
+            return 0
         surface = next(
             (
                 name
@@ -329,18 +331,23 @@ class HomeAssistantShadowObserver:
         accepted = 0
         for entity_id in entity_ids:
             if isinstance(entity_id, str) and entity_id in members:
-                self._guarded_ha_consequence_entities[entity_id] = guard_entity
+                self._guarded_ha_consequence_entities[entity_id] = (guard_entity, operation)
                 accepted += 1
         return accepted
 
     @callback
-    def _active_guard_for_ha_consequence(self, entity_id: str) -> str | None:
-        """Return the active guard only for an entity actually touched by HA."""
-        guard_id = self._guarded_ha_consequence_entities.get(entity_id)
-        if guard_id is None:
+    def _active_guard_for_ha_consequence(
+        self, entity_id: str, operation: str
+    ) -> str | None:
+        """Return active guard only when telemetry matches the renderer command."""
+        marker = self._guarded_ha_consequence_entities.get(entity_id)
+        if marker is None:
             return None
+        guard_id, marked_operation = marker
         if not self.hass.states.is_state(guard_id, STATE_ON):
             self._guarded_ha_consequence_entities.pop(entity_id, None)
+            return None
+        if marked_operation != operation:
             return None
         return guard_id
 

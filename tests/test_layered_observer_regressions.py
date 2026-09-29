@@ -328,12 +328,26 @@ async def test_guarded_automatic_right_ceiling_burst_does_not_create_manual(tmp_
     guard = "input_boolean.home_lighting_ha_guard_main_area"
     hass, observer = await observer_for(tmp_path, [leaf, group])
     try:
+        await seed_group(hass, group, (leaf,), state="on")
         hass.states.async_set(guard, "on")
+        # The actual HA command receipt marks only this leaf as an HLM consequence.
         hass.states.async_set(
             leaf,
             "on",
             {
                 "brightness": 43,
+                "color_mode": "xy",
+                "xy_color": [0.4711, 0.3867],
+            },
+            context=Context(parent_id="hlm-command"),
+        )
+        await hass.async_block_till_done()
+        # Hue may then emit a context-less follow-up for the same physical command.
+        hass.states.async_set(
+            leaf,
+            "on",
+            {
+                "brightness": 44,
                 "color_mode": "xy",
                 "xy_color": [0.4711, 0.3867],
             },
@@ -1795,6 +1809,115 @@ async def test_backyard_first_group_off_survives_real_hue_fanout_beyond_two_seco
         attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
         assert attrs["command_authority"] is False
         assert unmanaged_extra not in attrs["reconciliation_protected_entities"]
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("group", "guard", "left", "right"),
+    (
+        (
+            "light.holiday_main_area",
+            "input_boolean.home_lighting_ha_guard_main_area",
+            "light.main_left",
+            "light.main_right",
+        ),
+        (
+            "light.front_eve_zone",
+            "input_boolean.home_lighting_ha_guard_front_eve",
+            "light.front_left",
+            "light.front_right",
+        ),
+        (
+            "light.holiday_path",
+            "input_boolean.home_lighting_ha_guard_path",
+            "light.path_left",
+            "light.path_right",
+        ),
+        (
+            "light.holiday_backyard",
+            "input_boolean.home_lighting_ha_guard_backyard",
+            "light.back_left",
+            "light.back_right",
+        ),
+    ),
+)
+async def test_surface_guard_is_scoped_to_entity_actually_commanded_by_ha(
+    tmp_path, group, guard, left, right
+):
+    """One HA restore must not blind attribution for a different leaf on the surface."""
+    hass, observer = await observer_for(tmp_path, [left, right, group])
+    try:
+        await seed_group(hass, group, (left, right), state="on")
+        hass.states.async_set(left, "on", {"brightness": 100}, context=Context(user_id="homeowner"))
+        hass.states.async_set(right, "on", {"brightness": 100}, context=Context(user_id="homeowner"))
+        await hass.async_block_till_done()
+        assert observer.runtime.engine.resolve(left).layer.kind is LayerKind.MANUAL
+        assert observer.runtime.engine.resolve(right).layer.kind is LayerKind.MANUAL
+
+        hass.states.async_set(guard, "on")
+        await hass.async_block_till_done()
+
+        # HLM restores only left; this must scope the guard consequence to left.
+        hass.states.async_set(
+            left,
+            "on",
+            {"brightness": 120},
+            context=Context(parent_id="hlm-restore"),
+        )
+        await hass.async_block_till_done()
+
+        assert observer._active_guard_for_ha_consequence(left) == guard
+        assert observer._active_guard_for_ha_consequence(right) is None
+        assert "HA command guard is active for this entity" in (
+            observer._automatic_external_evidence_reason(left, hass.states.get(left)) or ""
+        )
+        assert observer._automatic_external_evidence_reason(
+            right, hass.states.get(right)
+        ) is None
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_main_area_second_leaf_off_is_retained_during_other_leaf_restore_guard(tmp_path):
+    """Regression: a sibling restore guard must not discard a genuine Hue OFF."""
+    left = "light.living_room_left_ceiling_light"
+    right = "light.living_room_living_room_right_ceiling"
+    group = "light.holiday_main_area"
+    guard = "input_boolean.home_lighting_ha_guard_main_area"
+    hass, observer = await observer_for(tmp_path, [left, right, group])
+    try:
+        await seed_group(hass, group, (left, right), state="on")
+        hass.states.async_set(guard, "on")
+        await hass.async_block_till_done()
+
+        # HLM restores left, so only left is entitled to guard suppression.
+        hass.states.async_set(
+            left,
+            "on",
+            {"brightness": 155, "dynamics": "none"},
+            context=Context(parent_id="hlm-restore"),
+        )
+        await hass.async_block_till_done()
+        assert observer._active_guard_for_ha_consequence(left) == guard
+        assert observer._active_guard_for_ha_consequence(right) is None
+
+        # Homeowner turns right OFF through Hue before the shared guard clears.
+        hass.states.async_set(right, "off", {"dynamics": "none"})
+        await hass.async_block_till_done()
+
+        evidence = [
+            item
+            for item in observer._off_leaf_evidence
+            if item.get("entity_id") == right and item.get("operation") == "off"
+        ]
+        assert evidence
+        assert evidence[-1]["result"] == "retained"
+        assert "HA command guard" not in evidence[-1]["result"]
     finally:
         await observer.async_shutdown()
         await hass.async_block_till_done()

@@ -121,6 +121,7 @@ class HomeAssistantShadowObserver:
         self._topology_members: dict[str, tuple[str, ...]] = {}
         self._nightly_boundary_settle_until: datetime | None = None
         self._post_boundary_off_entities: set[str] = set()
+        self._guarded_ha_consequence_entities: dict[str, str] = {}
 
     async def async_start(self) -> None:
         """Load trusted evidence and begin observation without command authority."""
@@ -205,6 +206,7 @@ class HomeAssistantShadowObserver:
         self._post_boundary_off_entities = self._boundary_managed_entities()
         self._last_decision = None
         self._evidence_ledger.clear()
+        self._guarded_ha_consequence_entities.clear()
         await self.async_save()
         return result
 
@@ -290,6 +292,7 @@ class HomeAssistantShadowObserver:
             guard = MANAGED_SURFACE_GUARDS[surface]
             if not self.hass.states.is_state(guard, STATE_ON):
                 return observation
+            self._guarded_ha_consequence_entities[entity_id] = guard
             return replace(
                 observation,
                 evidence=replace(
@@ -300,6 +303,17 @@ class HomeAssistantShadowObserver:
                 operation_id=None,
             )
         return observation
+
+    @callback
+    def _active_guard_for_ha_consequence(self, entity_id: str) -> str | None:
+        """Return the active guard only for an entity actually touched by HA."""
+        guard_id = self._guarded_ha_consequence_entities.get(entity_id)
+        if guard_id is None:
+            return None
+        if not self.hass.states.is_state(guard_id, STATE_ON):
+            self._guarded_ha_consequence_entities.pop(entity_id, None)
+            return None
+        return guard_id
 
     @callback
     def _record_external_topology(

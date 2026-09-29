@@ -57,9 +57,12 @@ async def test_parent_first_receipt_reports_success_or_exact_missing_pending_gat
             ),
         ):
             for n, leaf in enumerate(leaves):
-                # Controlled alternate cause: guard can be ON at a leaf, OFF at aggregate.
-                # This is a diagnostic test, NOT an assertion that it happened in the house.
-                hass.states.async_set(guard, "on" if filtered_leaf and n == count - 1 else "off")
+                # Guard state alone is no longer negative evidence for every sibling
+                # leaf. A filtered leaf must have an actual HA-command consequence.
+                is_filtered = filtered_leaf and n == count - 1
+                hass.states.async_set(guard, "on" if is_filtered else "off")
+                if is_filtered:
+                    observer._guarded_ha_consequence_entities[leaf] = guard
                 with patch(
                     "custom_components.home_lighting_manager.promotion_observer.dt_util.now",
                     return_value=start + timedelta(milliseconds=10 * n),

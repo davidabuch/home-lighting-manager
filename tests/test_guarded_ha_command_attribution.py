@@ -1,5 +1,8 @@
+from datetime import timedelta
+
 import pytest
 from homeassistant.core import Context, HomeAssistant
+from homeassistant.util import dt as dt_util
 
 from custom_components.home_lighting_manager.ha_observer import (
     MANAGED_SURFACE_GROUPS,
@@ -112,9 +115,6 @@ async def test_renderer_marker_expires_and_cannot_resurrect_across_guard_cycles(
     hass.states.async_set(GUARD, "on")
     hass.states.async_set(ENTITY, "on")
     observer = make_observer(hass)
-
-    from datetime import timedelta
-    from homeassistant.util import dt as dt_util
 
     t0 = dt_util.now()
     monkeypatch.setattr(

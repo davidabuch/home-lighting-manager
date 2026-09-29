@@ -62,7 +62,11 @@ async def test_parent_first_receipt_reports_success_or_exact_missing_pending_gat
                 is_filtered = filtered_leaf and n == count - 1
                 hass.states.async_set(guard, "on" if is_filtered else "off")
                 if is_filtered:
-                    observer._guarded_ha_consequence_entities[leaf] = (guard, "off", dt_util.now())
+                    observer._guarded_ha_consequence_entities[leaf] = (
+                            guard,
+                            "off",
+                            start + timedelta(milliseconds=10 * n),
+                        )
                 with patch(
                     "custom_components.home_lighting_manager.promotion_observer.dt_util.now",
                     return_value=start + timedelta(milliseconds=10 * n),

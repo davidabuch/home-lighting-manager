@@ -305,6 +305,35 @@ class HomeAssistantShadowObserver:
         return observation
 
     @callback
+    def register_renderer_command_consequences(
+        self, entity_ids: Iterable[str], guard_entity: str
+    ) -> int:
+        """Register exact leaves the legacy renderer is about to command.
+
+        This is attribution metadata only. HLM remains observation-only and never
+        dispatches a lighting command. The marker is accepted only for canonical
+        members of the surface corresponding to the currently active guard.
+        """
+        surface = next(
+            (
+                name
+                for name, guard in MANAGED_SURFACE_GUARDS.items()
+                if guard == guard_entity
+            ),
+            None,
+        )
+        if surface is None or not self.hass.states.is_state(guard_entity, STATE_ON):
+            return 0
+        group_id = MANAGED_SURFACE_GROUPS[surface]
+        members = set(self._surface_members_by_group.get(group_id, ()))
+        accepted = 0
+        for entity_id in entity_ids:
+            if isinstance(entity_id, str) and entity_id in members:
+                self._guarded_ha_consequence_entities[entity_id] = guard_entity
+                accepted += 1
+        return accepted
+
+    @callback
     def _active_guard_for_ha_consequence(self, entity_id: str) -> str | None:
         """Return the active guard only for an entity actually touched by HA."""
         guard_id = self._guarded_ha_consequence_entities.get(entity_id)

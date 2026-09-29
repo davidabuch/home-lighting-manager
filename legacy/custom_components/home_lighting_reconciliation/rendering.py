@@ -11,6 +11,8 @@ from copy import deepcopy
 from .const import GROUP_ALIASES, HLM_DIAGNOSTIC
 from .engine import LIQUOR, commands_in
 
+HLM_DOMAIN = "home_lighting_manager"
+
 
 def projection(hass):
     state = hass.states.get(HLM_DIAGNOSTIC)
@@ -139,6 +141,21 @@ def project_owners(hass, owners, members):
     return result
 
 
+
+async def mark_command_consequence(hass, entities, guard_entity):
+    """Register exact renderer targets with HLM before physical dispatch."""
+    targets = sorted(set(entities))
+    if not targets:
+        return
+    if not hass.services.has_service(HLM_DOMAIN, "mark_command_consequence"):
+        raise ValueError("HLM renderer attribution service unavailable")
+    await hass.services.async_call(
+        HLM_DOMAIN,
+        "mark_command_consequence",
+        {"entity_ids": targets, "guard_entity": guard_entity},
+        blocking=True,
+    )
+
 async def render(adapter, surface, service, entities, parameters, context, expected_owner=None):
     """Filter one legacy renderer request immediately before physical dispatch."""
     hass = adapter.hass
@@ -201,12 +218,11 @@ async def render(adapter, surface, service, entities, parameters, context, expec
     if not allowed:
         adapter.render_note(surface, "no_eligible_automatic_members", sorted(protected))
         return
+    guard_entity = "input_boolean.home_lighting_ha_guard_" + surface
     await hass.services.async_call(
         "script",
         "home_lighting_rearm_ha_guard",
-        {
-            "guard_entity": "input_boolean.home_lighting_ha_guard_" + surface,
-        },
+        {"guard_entity": guard_entity},
         blocking=True,
         context=context,
     )
@@ -250,6 +266,7 @@ async def render(adapter, surface, service, entities, parameters, context, expec
                     (s := hass.states.get(e)) and s.state not in ("unknown", "unavailable")
                     for e in actions
                 ):
+                    await mark_command_consequence(hass, targets, guard_entity)
                     await hass.services.async_call(
                         "scene",
                         "turn_on",
@@ -259,6 +276,7 @@ async def render(adapter, surface, service, entities, parameters, context, expec
                     )
                     adapter.render_note(surface, "native_scene", [scene])
             else:
+                await mark_command_consequence(hass, targets, guard_entity)
                 applied = await adapter.hue.apply_actions(
                     info, protected=set(actions) - targets, valid=valid
                 )
@@ -281,6 +299,7 @@ async def render(adapter, surface, service, entities, parameters, context, expec
                 return
             if entity not in eligible():
                 continue
+            await mark_command_consequence(hass, [entity], guard_entity)
             domain, action = service.split(".")
             await hass.services.async_call(
                 domain, action, {"entity_id": entity, **parameters}, blocking=True, context=context

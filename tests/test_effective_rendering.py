@@ -518,3 +518,35 @@ async def test_obsolete_scene_cannot_run_under_same_owner_after_holiday_changes(
     )
     assert not rig.lights()
     assert rig.renderer.runner.diag["last_render"]["reason"] == "obsolete_scene_selection"
+
+
+@pytest.mark.asyncio
+async def test_renderer_marks_each_leaf_before_physical_light_dispatch(rig):
+    runtime, members = setup(rig, "backyard", "off")
+    rig.set("input_boolean.home_lighting_backyard_window", "off")
+    publish(rig, runtime, members)
+    target = members[0]
+    rig.set(target, "on")
+    rig.calls.clear()
+    await rig.hass.services.async_call(
+        "home_lighting_reconciliation",
+        "render",
+        {
+            "surface": "backyard",
+            "command": "light.turn_off",
+            "entity_id": target,
+            "parameters": {},
+        },
+        blocking=True,
+    )
+    mark_indexes = [
+        i for i, (service, data) in enumerate(rig.calls)
+        if service == "home_lighting_manager.mark_command_consequence"
+        and target in data.get("entity_ids", [])
+    ]
+    light_indexes = [
+        i for i, (service, data) in enumerate(rig.calls)
+        if service == "light.turn_off" and data.get("entity_id") == target
+    ]
+    assert mark_indexes and light_indexes
+    assert mark_indexes[0] < light_indexes[0]

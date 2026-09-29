@@ -1921,3 +1921,46 @@ async def test_main_area_second_leaf_off_is_retained_during_other_leaf_restore_g
     finally:
         await observer.async_shutdown()
         await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_explicit_renderer_marker_blocks_false_manual_repromotion(tmp_path):
+    """Renderer marker must quarantine context-less restore telemetry for that exact leaf."""
+    leaf = "light.living_room_left_ceiling_light"
+    group = "light.holiday_main_area"
+    guard = "input_boolean.home_lighting_ha_guard_main_area"
+    hass, observer = await observer_for(tmp_path, [leaf, group])
+    try:
+        await seed_group(hass, group, (leaf,), state="on")
+        hass.states.async_set(guard, "on")
+        await hass.async_block_till_done()
+
+        accepted = observer.register_renderer_command_consequences([leaf], guard)
+        assert accepted == 1
+        assert observer._active_guard_for_ha_consequence(leaf) == guard
+
+        # Hue strips HA context; both events therefore look external.
+        hass.states.async_set(
+            leaf,
+            "on",
+            {"brightness": 43, "xy_color": [0.4711, 0.3867], "dynamics": "none"},
+        )
+        await hass.async_block_till_done()
+        hass.states.async_set(
+            group,
+            "on",
+            {"entity_id": [leaf], "brightness": 43},
+        )
+        await hass.async_block_till_done()
+
+        assert observer.runtime.engine.resolve(leaf).layer is None
+        evidence = [
+            item
+            for item in observer._off_leaf_evidence
+            if item.get("entity_id") == leaf
+        ]
+        assert evidence
+        assert "HA command guard is active for this entity" in evidence[-1]["result"]
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()

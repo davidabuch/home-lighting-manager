@@ -41,5 +41,19 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     async def async_reset_ownership(_call: ServiceCall) -> None:
         await observer.async_reset_homeowner_control()
 
+    async def async_mark_command_consequence(call: ServiceCall) -> None:
+        entity_ids = call.data.get("entity_ids", ())
+        guard_entity = call.data.get("guard_entity")
+        if isinstance(entity_ids, str):
+            entity_ids = [entity_ids]
+        if not isinstance(entity_ids, (list, tuple)) or not isinstance(guard_entity, str):
+            raise ValueError("Invalid renderer attribution payload")
+        accepted = observer.register_renderer_command_consequences(entity_ids, guard_entity)
+        if accepted != len(entity_ids):
+            raise ValueError("Renderer attribution rejected one or more entities")
+
     hass.services.async_register(DOMAIN, "reset_ownership", async_reset_ownership)
+    hass.services.async_register(
+        DOMAIN, "mark_command_consequence", async_mark_command_consequence
+    )
     return True

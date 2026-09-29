@@ -22,3 +22,10 @@ mark_command_consequence:
       selector:
         entity:
           domain: input_boolean
+    operation:
+      required: true
+      selector:
+        select:
+          options:
+            - appearance
+            - off

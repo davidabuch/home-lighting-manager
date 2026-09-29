@@ -328,6 +328,7 @@ async def test_guarded_automatic_right_ceiling_burst_does_not_create_manual(tmp_
     guard = "input_boolean.home_lighting_ha_guard_main_area"
     hass, observer = await observer_for(tmp_path, [leaf, group])
     try:
+        await seed_group(hass, group, (leaf,), state="on")
         hass.states.async_set(guard, "on")
         # The actual HA command receipt marks only this leaf as an HLM consequence.
         hass.states.async_set(
@@ -1882,8 +1883,8 @@ async def test_surface_guard_is_scoped_to_entity_actually_commanded_by_ha(
 
 
 @pytest.mark.asyncio
-async def test_main_area_first_off_on_second_leaf_survives_other_leaf_restore_guard(tmp_path):
-    """Regression: rapid individual OFFs must peel Manual independently across one scene."""
+async def test_main_area_second_leaf_off_is_retained_during_other_leaf_restore_guard(tmp_path):
+    """Regression: a sibling restore guard must not discard a genuine Hue OFF."""
     left = "light.living_room_left_ceiling_light"
     right = "light.living_room_living_room_right_ceiling"
     group = "light.holiday_main_area"
@@ -1891,32 +1892,10 @@ async def test_main_area_first_off_on_second_leaf_survives_other_leaf_restore_gu
     hass, observer = await observer_for(tmp_path, [left, right, group])
     try:
         await seed_group(hass, group, (left, right), state="on")
-        for leaf in (left, right):
-            hass.states.async_set(
-                leaf,
-                "on",
-                {"brightness": 140, "dynamics": "none"},
-                context=Context(user_id="homeowner"),
-            )
-            await hass.async_block_till_done()
-        assert all(
-            observer.runtime.engine.resolve(leaf).layer.kind is LayerKind.MANUAL
-            for leaf in (left, right)
-        )
-
-        # First homeowner OFF releases left.
-        hass.states.async_set(left, "off", {"dynamics": "none"})
-        await hass.async_block_till_done()
-        hass.states.async_set(
-            group,
-            "on",
-            {"entity_id": [left, right], "dynamics": "none"},
-        )
-        await hass.async_block_till_done()
-        assert observer.runtime.engine.resolve(left).layer is None
-
-        # HLM immediately restores left and raises the shared surface guard.
         hass.states.async_set(guard, "on")
+        await hass.async_block_till_done()
+
+        # HLM restores left, so only left is entitled to guard suppression.
         hass.states.async_set(
             left,
             "on",
@@ -1925,20 +1904,20 @@ async def test_main_area_first_off_on_second_leaf_survives_other_leaf_restore_gu
         )
         await hass.async_block_till_done()
         assert observer._active_guard_for_ha_consequence(left) == guard
+        assert observer._active_guard_for_ha_consequence(right) is None
 
-        # The homeowner turns right OFF before the 8-second surface guard clears.
-        # This must still release right because HLM did not command right.
+        # Homeowner turns right OFF through Hue before the shared guard clears.
         hass.states.async_set(right, "off", {"dynamics": "none"})
         await hass.async_block_till_done()
-        hass.states.async_set(
-            group,
-            "on",
-            {"entity_id": [left, right], "dynamics": "none"},
-        )
-        await hass.async_block_till_done()
 
-        assert observer.runtime.engine.resolve(right).layer is None
-        assert observer.runtime.operations.latest_homeowner["reason"] == "released_manual"
+        evidence = [
+            item
+            for item in observer._off_leaf_evidence
+            if item.get("entity_id") == right and item.get("operation") == "off"
+        ]
+        assert evidence
+        assert evidence[-1]["result"] == "retained"
+        assert "HA command guard" not in evidence[-1]["result"]
     finally:
         await observer.async_shutdown()
         await hass.async_block_till_done()

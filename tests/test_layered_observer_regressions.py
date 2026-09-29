@@ -1869,8 +1869,8 @@ async def test_surface_guard_is_scoped_to_entity_actually_commanded_by_ha(
         )
         await hass.async_block_till_done()
 
-        assert observer._active_guard_for_ha_consequence(left) == guard
-        assert observer._active_guard_for_ha_consequence(right) is None
+        assert observer._active_guard_for_ha_consequence(left, "appearance") == guard
+        assert observer._active_guard_for_ha_consequence(right, "appearance") is None
         assert "HA command guard is active for this entity" in (
             observer._automatic_external_evidence_reason(left, hass.states.get(left)) or ""
         )
@@ -1903,8 +1903,8 @@ async def test_main_area_second_leaf_off_is_retained_during_other_leaf_restore_g
             context=Context(parent_id="hlm-restore"),
         )
         await hass.async_block_till_done()
-        assert observer._active_guard_for_ha_consequence(left) == guard
-        assert observer._active_guard_for_ha_consequence(right) is None
+        assert observer._active_guard_for_ha_consequence(left, "appearance") == guard
+        assert observer._active_guard_for_ha_consequence(right, "appearance") is None
 
         # Homeowner turns right OFF through Hue before the shared guard clears.
         hass.states.async_set(right, "off", {"dynamics": "none"})
@@ -1935,9 +1935,9 @@ async def test_explicit_renderer_marker_blocks_false_manual_repromotion(tmp_path
         hass.states.async_set(guard, "on")
         await hass.async_block_till_done()
 
-        accepted = observer.register_renderer_command_consequences([leaf], guard)
+        accepted = observer.register_renderer_command_consequences([leaf], guard, "appearance")
         assert accepted == 1
-        assert observer._active_guard_for_ha_consequence(leaf) == guard
+        assert observer._active_guard_for_ha_consequence(leaf, "appearance") == guard
 
         # Hue strips HA context; both events therefore look external.
         hass.states.async_set(

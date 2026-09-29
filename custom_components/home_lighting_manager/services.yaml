@@ -28,5 +28,5 @@ mark_command_consequence:
       selector:
         select:
           options:
-            - appearance
-            - off
+            - "appearance"
+            - "off"

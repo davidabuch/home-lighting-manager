@@ -353,22 +353,18 @@ async def test_guarded_automatic_right_ceiling_burst_does_not_create_manual(tmp_
             },
         )
         await hass.async_block_till_done()
-        hass.states.async_set(
-            group,
-            "on",
-            {
-                "entity_id": [leaf],
-                "brightness": 43,
-            },
-        )
-        await hass.async_block_till_done()
-
+        # Same-leaf context-less follow-up is suppressed because this exact
+        # entity was just observed as an HA command consequence under the guard.
         assert observer.runtime.engine.resolve(leaf).layer is None
         assert not observer.runtime.operations.history
+        evidence = [
+            item
+            for item in observer._off_leaf_evidence
+            if item.get("entity_id") == leaf
+        ]
+        assert evidence
+        assert "HA command guard is active for this entity" in evidence[-1]["result"]
         attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
-        candidate = attrs["external_burst"]["external_intent_candidate"]
-        assert candidate["qualified"] is True
-        assert candidate["promoted_to_homeowner"] is False
         assert attrs["command_authority"] is False
     finally:
         await observer.async_shutdown()

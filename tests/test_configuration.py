@@ -28,6 +28,37 @@ async def test_owner_resolution(rig):
     assert not rig.lights()
 
 
+@pytest.mark.asyncio
+async def test_owner_resolution_reads_hlm_managed_groups_without_string_roundtrip(rig):
+    rig.set(
+        "sensor.home_lighting_manager_shadow_health",
+        "observing",
+        {
+            "command_authority": False,
+            "manual_precedence_entities": [],
+            "reconciliation_protected_entities": [],
+            "effective_ownership": {
+                "version": 1,
+                "groups": {
+                    "light.holiday_path": ["light.front_yard_front_path_light_1"],
+                    "light.front_eve_zone": ["light.front_yard_front_eve_lights"],
+                    "light.holiday_backyard": ["light.backyard_backyard_flood_light"],
+                },
+                "entities": {},
+            },
+        },
+    )
+    rig.set("input_boolean.home_lighting_manual_path", "on")
+    rig.set("input_boolean.home_lighting_manual_front_eve", "on")
+    rig.set("input_boolean.home_lighting_manual_backyard", "on")
+
+    owners = (await rig.run("home_lighting_resolve_owners")).service_response
+
+    assert owners["path"]["owner"] != "manual"
+    assert owners["front_eve"]["owner"] != "manual"
+    assert owners["backyard"]["owner"] != "manual"
+
+
 def test_yaml_duplicate_keys_and_removed_ghost_scene():
     class UniqueLoader(yaml.SafeLoader):
         pass

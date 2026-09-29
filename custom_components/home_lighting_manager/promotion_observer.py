@@ -614,9 +614,13 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         ):
             return "active Hue dynamics are automatic scene telemetry"
 
-        guard_id = self._active_guard_for_ha_consequence(entity_id)
+        operation = "off" if new_state.state == "off" else "appearance"
+        guard_id = self._active_guard_for_ha_consequence(entity_id, operation)
         if guard_id is not None:
-            return f"HA command guard is active for this entity: {guard_id}"
+            return (
+                f"HA command guard is active for this entity and operation "
+                f"{operation}: {guard_id}"
+            )
         return None
 
     @callback

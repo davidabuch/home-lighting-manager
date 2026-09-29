@@ -58,6 +58,13 @@ def setup(rig, surface, owner="daily"):
             rig.set(entity, "on" if action["action"]["on"]["on"] else "off")
 
     rig.hass.services.async_register("scene", "turn_on", physical_scene)
+
+    async def mark_command_consequence(call):
+        rig.calls.append(("home_lighting_manager.mark_command_consequence", dict(call.data)))
+
+    rig.hass.services.async_register(
+        "home_lighting_manager", "mark_command_consequence", mark_command_consequence
+    )
     return runtime, members
 
 
@@ -518,3 +525,33 @@ async def test_obsolete_scene_cannot_run_under_same_owner_after_holiday_changes(
     )
     assert not rig.lights()
     assert rig.renderer.runner.diag["last_render"]["reason"] == "obsolete_scene_selection"
+
+
+@pytest.mark.asyncio
+async def test_renderer_marks_each_leaf_before_physical_light_dispatch(rig):
+    runtime, members = setup(rig, "main_area")
+    publish(rig, runtime, members)
+    target = members[0]
+    rig.calls.clear()
+    await rig.hass.services.async_call(
+        "home_lighting_reconciliation",
+        "render",
+        {
+            "surface": "main_area",
+            "command": "light.turn_on",
+            "entity_id": target,
+            "parameters": {},
+        },
+        blocking=True,
+    )
+    mark_indexes = [
+        i for i, (service, data) in enumerate(rig.calls)
+        if service == "home_lighting_manager.mark_command_consequence"
+        and target in data.get("entity_ids", [])
+    ]
+    light_indexes = [
+        i for i, (service, data) in enumerate(rig.calls)
+        if service == "light.turn_on" and data.get("entity_id") == target
+    ]
+    assert mark_indexes and light_indexes
+    assert mark_indexes[0] < light_indexes[0]

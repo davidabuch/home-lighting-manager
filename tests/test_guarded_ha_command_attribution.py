@@ -1,7 +1,7 @@
 from datetime import timedelta
 
 import pytest
-from homeassistant.core import Context, HomeAssistant
+from homeassistant.core import Context, HomeAssistant, State
 from homeassistant.util import dt as dt_util
 
 from custom_components.home_lighting_manager.ha_observer import (
@@ -51,6 +51,7 @@ async def test_guarded_direct_ha_off_is_hlm_consequence_not_manual_off(tmp_path)
     assert observation is not None
     assert observation.evidence.kind is IntentEvidenceKind.EXPLICIT_HOMEOWNER_COMMAND
 
+    assert observer.register_renderer_command_consequences([ENTITY], GUARD, "off") == 1
     guarded = observer._apply_ha_guard_attribution(ENTITY, observation)
     assert guarded.evidence.kind is IntentEvidenceKind.HLM_COMMAND_CONSEQUENCE
     assert guarded.evidence.attribution_source is IntentAttributionSource.HOME_ASSISTANT_USER
@@ -96,7 +97,7 @@ async def test_guard_does_not_swallow_unattributed_external_hue_event(tmp_path):
     state = hass.states.get(ENTITY)
     observation = observation_from_state_change(
         ENTITY,
-        None,
+        State(ENTITY, "on"),
         state,
         Context(),
         manual_precedence=SURFACE_MANUAL_PRECEDENCE,

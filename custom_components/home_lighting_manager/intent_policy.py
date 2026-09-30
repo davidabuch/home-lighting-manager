@@ -49,6 +49,15 @@ class IntentEvidence:
     attribution_source: IntentAttributionSource = IntentAttributionSource.UNKNOWN
     has_user_id: bool = False
     has_parent_id: bool = False
+    renderer_consequence: bool = False
+    aggregate_receipt: bool = False
+    boundary_settling: bool = False
+    boundary_shutdown_pending: bool = False
+    scene_rendering: bool = False
+    dynamic_telemetry: bool = False
+    structural_activity: bool = False
+    structural_state_unknown: bool = False
+    scene_guard_active: bool = False
 
 
 @dataclass(frozen=True)
@@ -62,6 +71,32 @@ class IntentDecision:
 
 def classify_intent(evidence: IntentEvidence) -> IntentDecision:
     """Classify evidence under the contract's homeowner-intent/ambiguity rules."""
+    # Availability/recovery and exact renderer receipts are causal exclusions, not
+    # surface ownership policies. A guard alone is deliberately insufficient.
+    if evidence.kind in (IntentEvidenceKind.AVAILABILITY_CHANGE, IntentEvidenceKind.RECOVERY_TELEMETRY):
+        return IntentDecision(IntentDisposition.HLM_OWNED, False,
+                              "availability/recovery telemetry is not homeowner intent")
+    if evidence.renderer_consequence:
+        return IntentDecision(IntentDisposition.HLM_OWNED, False,
+                              "exact renderer target/operation consequence")
+    if evidence.aggregate_receipt:
+        return IntentDecision(IntentDisposition.HLM_OWNED, False,
+                              "aggregate propagation requires an explicit scoped operation")
+    # Direct affirmative provenance outranks temporal quarantine; context-less
+    # evidence must first clear causality exclusions before topology qualification.
+    if evidence.kind is not IntentEvidenceKind.EXPLICIT_HOMEOWNER_COMMAND:
+        exclusions = (
+            (evidence.structural_activity, "active structural session telemetry"),
+            (evidence.structural_state_unknown, "structural session state is unavailable"),
+            (evidence.scene_guard_active, "scene recall during renderer guard"),
+            (evidence.scene_rendering, "authoritative Hue scene appearance is settling"),
+            (evidence.boundary_settling, "nightly 01:59 boundary settling"),
+            (evidence.boundary_shutdown_pending, "boundary shutdown awaits current presentation evidence"),
+            (evidence.dynamic_telemetry, "active Hue dynamics are automatic scene telemetry"),
+        )
+        for applies, reason in exclusions:
+            if applies:
+                return IntentDecision(IntentDisposition.HLM_OWNED, False, reason)
     if evidence.kind is IntentEvidenceKind.EXPLICIT_HOMEOWNER_COMMAND:
         if not evidence.succeeded:
             return IntentDecision(

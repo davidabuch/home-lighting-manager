@@ -4,6 +4,7 @@ from datetime import timedelta
 from unittest.mock import patch
 
 import pytest
+from conftest import seed_observed_lights
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.util import dt as dt_util
 
@@ -20,6 +21,7 @@ async def observer_for(tmp_path, entities):
     observer = PromotingHomeAssistantShadowObserver(
         hass, entities, dict.fromkeys(entities, 250)
     )
+    seed_observed_lights(hass, entities)
     await observer.async_start()
     return hass, observer
 

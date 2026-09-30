@@ -147,3 +147,8 @@ ambiguous promotion or permanently vetoing subsets is not an acceptable substitu
 The existing per-entity protection API includes both exposed Manual and Manual-OFF. The missing
 ownership result, rather than a missing boolean bridge, prevents protection in the reported case.
 No broad ownership-engine redesign or unrelated contract work is justified before that cause is known.
+
+
+September 29 follow-up: the historically listed persisted OFF epoch and guard fallback are
+superseded by [normalized intent and causal lifecycle](../adr/0004-normalized-ownership-intent.md).
+The exact-group diagnostic and transaction checks in this investigation remain relevant.

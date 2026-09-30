@@ -12,6 +12,7 @@ from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import pytest
+from conftest import seed_observed_lights
 from homeassistant.core import HomeAssistant
 
 from custom_components.home_lighting_manager.attribution_correlation import (
@@ -449,6 +450,7 @@ async def test_rapid_external_operations_each_require_fresh_aggregate_and_latest
 ):
     hass = HomeAssistant(str(tmp_path))
     observer = PromotingHomeAssistantShadowObserver(hass, [A, "light.group"], {A: 250})
+    seed_observed_lights(hass, observer.entity_ids)
     await observer.async_start()
     try:
         for n, value in enumerate(values, 1):

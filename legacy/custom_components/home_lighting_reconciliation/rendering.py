@@ -47,7 +47,14 @@ def projection(hass):
             or record["desired"].get("on") is not False
         ):
             raise ValueError("Invalid HLM Manual-OFF projection")
-    return deepcopy(value)
+    result = deepcopy(value)
+    pending = state.attributes.get("pending_intent_entities", ())
+    if not isinstance(pending, (list, tuple)) or len(pending) > 256 or any(
+        not isinstance(entity, str) for entity in pending
+    ):
+        raise ValueError("Invalid HLM provisional evidence scope")
+    result["pending_entities"] = sorted(set(pending) & set(result["entities"]))
+    return result
 
 
 def same_effective_ownership(current, initial):
@@ -60,6 +67,7 @@ def same_effective_ownership(current, initial):
         and current.get("automatic_authority") == initial.get("automatic_authority")
         and current.get("entities") == initial.get("entities")
         and current.get("groups") == initial.get("groups")
+        and current.get("pending_entities") == initial.get("pending_entities")
     )
 
 
@@ -131,8 +139,12 @@ def project_owners(hass, owners, members):
         result[surface]["manual_off_entities"] = sorted(
             e for e, v in records.items() if v["kind"] == "manual_off"
         )
-        result[surface]["excluded_entities"] = (
-            sorted(set(group) - set(view["entities"])) if view else []
+        result[surface]["pending_intent_entities"] = sorted(
+            set(group) & set(view.get("pending_entities", ()))
+        )
+        result[surface]["excluded_entities"] = sorted(
+            (set(group) - set(view["entities"]) if view else set())
+            | set(result[surface]["pending_intent_entities"])
         )
         result[surface]["effective_entities"] = records
         result[surface]["ownership_token"] = {
@@ -227,7 +239,7 @@ async def render(adapter, surface, service, entities, parameters, context, expec
         adapter.render_note(surface, "unresolved_membership", entities)
         return
     current = project_owners(hass, owners, members)[surface]
-    protected = set(current["manual_entities"])
+    protected = set(current["manual_entities"]) | set(current["pending_intent_entities"])
     if surface == "main_area" and owners["liquor_cabinet"]["owner"] == "door":
         protected.add(LIQUOR)
     # Raw Hue extras are never added to HLM ownership. They may participate in a

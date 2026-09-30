@@ -279,7 +279,7 @@ def test_context_attribution_preserves_external_vs_ha_user_topology():
 
     external = observation_from_state_change(
         "light.shadow_test",
-        None,
+        State("light.shadow_test", "off"),
         State("light.shadow_test", "on", {"brightness": 100}),
         Context(),
         manual_precedence=200,

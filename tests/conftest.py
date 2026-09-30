@@ -16,6 +16,24 @@ sys.path.insert(0, str(ROOT))
 PACKAGE = yaml.safe_load((ROOT / "packages/home_lighting_manager.yaml").read_text())
 
 
+def seed_observed_lights(hass, entity_ids):
+    """Model pre-existing available devices before testing a new homeowner command.
+
+    First entity discovery is recovery telemetry. Command tests must not accidentally
+    use discovery as successful homeowner evidence; dedicated recovery tests omit this.
+    """
+    from custom_components.home_lighting_manager.ha_observer import MANAGED_SURFACE_GUARDS
+
+    for entity in [*MANAGED_SURFACE_GUARDS.values(), "binary_sensor.hue_bridge_living_room",
+                   "binary_sensor.hue_bridge_backyard"]:
+        if hass.states.get(entity) is None:
+            hass.states.async_set(entity, "off", context=Context(parent_id="fixture-bootstrap"))
+    for entity in entity_ids:
+        if entity.startswith("light.") and hass.states.get(entity) is None:
+            hass.states.async_set(entity, "on", {"brightness": 1},
+                                  context=Context(parent_id="fixture-bootstrap"))
+
+
 class Rig:
     def __init__(self, hass):
         self.hass = hass

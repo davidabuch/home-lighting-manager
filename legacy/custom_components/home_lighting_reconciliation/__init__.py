@@ -16,7 +16,7 @@ from homeassistant.util import dt as dt_util
 from .const import CONTROL, DOMAIN, EVALUATORS, HLM_DIAGNOSTIC, SIGNAL, SURFACES, TRANSIENTS
 from .engine import GROUPS, LIQUOR, commands_in, verify
 from .hue import HueEvidence
-from .rendering import project_owners, render
+from .rendering import mark_command_consequence, mark_scene_targets, project_owners, render
 from .runtime import Reconciler
 
 _LOGGER = logging.getLogger(__name__)
@@ -306,6 +306,14 @@ class Adapter:
                     latest = self.with_legacy_overlay_exclusions(latest)
                     return valid() and latest == owners and not self.suppression().get(command.surface)
 
+                targets = (set(scene_info["actions"]) - set(command.data.get("protected", ())))
+                targets &= set(current[command.surface].get("effective_entities", {}))
+                await mark_scene_targets(
+                    self.hass, scene_info["actions"], targets,
+                    "input_boolean.home_lighting_ha_guard_" + command.surface,
+                )
+                if not await still_current():
+                    return False
                 await self.hue.apply_actions(
                     scene_info,
                     protected=command.data.get("protected", ()),
@@ -317,6 +325,24 @@ class Adapter:
             return True
 
         domain, service = command.service.split(".")
+        guard_entity = "input_boolean.home_lighting_ha_guard_" + command.surface
+        if domain == "scene":
+            info = metadata.get(command.entity)
+            if not info:
+                return False
+            targets = set(info["actions"]) & set(current[command.surface].get("effective_entities", {}))
+            await mark_scene_targets(self.hass, info["actions"], targets, guard_entity)
+        elif domain == "light":
+            await mark_command_consequence(
+                self.hass, [command.entity], guard_entity,
+                "off" if service == "turn_off" else "appearance",
+            )
+        after_mark = self.with_legacy_overlay_exclusions(
+            self.with_hlm_protection(await self.owners(), members)
+        )
+        if (not valid() or after_mark != current or self.active_scripts() != scripts
+            or command.surface in self.suppression()):
+            return False
         await self.hass.services.async_call(
             domain,
             service,
@@ -342,6 +368,8 @@ class Adapter:
                     old
                     and new
                     and old.attributes.get("effective_ownership") == new.attributes.get("effective_ownership")
+                    and old.attributes.get("pending_intent_entities")
+                    == new.attributes.get("pending_intent_entities")
                     and old.attributes.get("manual_precedence_entities")
                     == new.attributes.get("manual_precedence_entities")
                     and old.attributes.get("reconciliation_protected_entities")

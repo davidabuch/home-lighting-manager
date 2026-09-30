@@ -91,7 +91,7 @@ async def test_parent_first_receipt_reports_success_or_exact_missing_pending_gat
                 assert attempts[-1]["pending_members"][leaves[-1]] is None
                 assert attempts[-1]["armed_members"] == tuple(sorted(leaves))
                 assert any(
-                    "guard is active" in str(x["result"]) for x in observer._off_leaf_evidence
+                    "exact renderer target/operation consequence" in str(x["result"]) for x in observer._off_leaf_evidence
                 )
             else:
                 assert attempts[-1]["result"] == "created_group_manual_off"
@@ -356,7 +356,8 @@ async def test_armed_parent_defers_exact_child_until_parent_second_off_completes
     }
     parent_candidate = {}
 
-    with patch.object(observer.hass, "async_create_task"):
+    # This diagnostic-only harness skips disk tasks; close the discarded coroutine.
+    with patch.object(observer.hass, "async_create_task", side_effect=lambda coro: coro.close()):
         assert observer._promote_armed_group_off(
             parent_burst,
             parent_candidate,
@@ -379,7 +380,8 @@ async def test_armed_parent_defers_exact_child_until_parent_second_off_completes
 
     # Even if a cancelled HA timer races and invokes its callback, the consumed
     # deferred child no longer has permission to mutate ownership.
-    with patch.object(observer.hass, "async_create_task"):
+    # This diagnostic-only harness skips disk tasks; close the discarded coroutine.
+    with patch.object(observer.hass, "async_create_task", side_effect=lambda coro: coro.close()):
         callbacks[0](dt_util.now())
     assert observer.runtime.operations.latest_homeowner["group_id"] == parent
     assert observer.runtime.operations.latest_homeowner["reason"] == "created_group_manual_off"
@@ -456,7 +458,8 @@ async def test_genuine_child_off_resolves_after_armed_parent_correlation_window(
     assert parent in observer.runtime.engine.group_off_sequences()
     assert child not in observer.runtime.engine.group_off_sequences()
 
-    with patch.object(observer.hass, "async_create_task"):
+    # This diagnostic-only harness skips disk tasks; close the discarded coroutine.
+    with patch.object(observer.hass, "async_create_task", side_effect=lambda coro: coro.close()):
         callbacks[0](dt_util.now())
 
     latest = observer.runtime.operations.latest_homeowner

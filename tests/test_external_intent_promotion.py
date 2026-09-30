@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from conftest import seed_observed_lights
 
 from custom_components.home_lighting_manager.intent_policy import (
     IntentAttributionSource,
@@ -77,6 +78,7 @@ async def test_qualified_external_leaf_records_manual_when_precedence_is_configu
         ["light.path_1", "light.path_group"],
         {"light.path_1": 250},
     )
+    seed_observed_lights(hass, observer.entity_ids)
     await observer.async_start()
 
     hass.states.async_set("light.path_1", "on", {"brightness": 128})
@@ -125,6 +127,7 @@ async def test_qualified_external_leaf_without_precedence_promotes_intent_but_no
         hass,
         ["light.path_1", "light.path_group"],
     )
+    seed_observed_lights(hass, observer.entity_ids)
     await observer.async_start()
 
     hass.states.async_set("light.path_1", "on", {"brightness": 128})
@@ -164,6 +167,7 @@ async def test_availability_change_is_never_retained_for_homeowner_promotion(tmp
         ["light.path_1", "light.path_group"],
         {"light.path_1": 250},
     )
+    seed_observed_lights(hass, observer.entity_ids)
     await observer.async_start()
 
     hass.states.async_set("light.path_1", "unavailable")
@@ -181,10 +185,12 @@ async def test_availability_change_is_never_retained_for_homeowner_promotion(tmp
     health = hass.states.get(DIAGNOSTIC_ENTITY_ID)
     assert health is not None
     candidate = health.attributes["external_burst"]["external_intent_candidate"]
-    assert candidate["qualified"] is True
+    assert candidate["qualified"] is False
     assert candidate["promoted_to_homeowner"] is False
-    assert candidate["manual_ownership_recorded"] is False
-    assert candidate["promotion_reason"] == "qualified burst lacked retained leaf observation"
+    assert "light.path_1" not in observer._pending_external_leaves
+    assert observer._off_leaf_evidence[-1]["result"] == (
+        "availability/recovery telemetry is not homeowner intent"
+    )
 
     await observer.async_shutdown()
     await hass.async_block_till_done()
@@ -205,6 +211,7 @@ async def test_same_external_burst_is_promoted_only_once(tmp_path):
         ["light.path_1", "light.path_group", "light.holiday_path"],
         {"light.path_1": 250},
     )
+    seed_observed_lights(hass, observer.entity_ids)
     await observer.async_start()
 
     hass.states.async_set("light.path_1", "on", {"brightness": 128})
@@ -234,7 +241,7 @@ async def test_same_external_burst_is_promoted_only_once(tmp_path):
 
 @pytest.mark.asyncio
 async def test_front_eve_one_member_rebound_does_not_promote_manual(tmp_path):
-    """Front Eve leaf+one-member aggregate is one ambiguous receipt, not two proofs."""
+    """Known renderer rebound is excluded generically, including one-member topology."""
     from homeassistant.core import HomeAssistant
 
     from custom_components.home_lighting_manager.ha_observer import DIAGNOSTIC_ENTITY_ID
@@ -262,7 +269,12 @@ async def test_front_eve_one_member_rebound_does_not_promote_manual(tmp_path):
         [leaf, group],
         {leaf: 250},
     )
+    seed_observed_lights(hass, observer.entity_ids)
     await observer.async_start()
+
+    guard = "input_boolean.home_lighting_ha_guard_front_eve"
+    hass.states.async_set(guard, "on")
+    assert observer.register_renderer_command_consequences([leaf], guard, "appearance") == 1
 
     hass.states.async_set(
         leaf,
@@ -292,13 +304,8 @@ async def test_front_eve_one_member_rebound_does_not_promote_manual(tmp_path):
     health = hass.states.get(DIAGNOSTIC_ENTITY_ID)
     assert health is not None
     candidate = health.attributes["external_burst"]["external_intent_candidate"]
-    assert candidate["qualified"] is True
-    assert candidate["entity_id"] == leaf
-    assert candidate["promoted_to_homeowner"] is False
-    assert candidate["manual_ownership_recorded"] is False
-    assert candidate["promotion_reason"] == (
-        "single-member Front Eve aggregate is not independent homeowner corroboration"
-    )
+    assert candidate["qualified"] is False
+    assert observer._off_leaf_evidence[-1]["result"] == "exact renderer target/operation consequence"
     assert health.attributes["reconciliation_protected_entities"] == []
 
     await observer.async_shutdown()

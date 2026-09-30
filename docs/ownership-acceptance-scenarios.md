@@ -119,3 +119,33 @@ actual Spa/49ers wiring, external group inference and live HA commissioning rema
 | Unavailable membership, newer individual intent and individual double-OFF remain separate | `test_unavailable_group_member_and_newer_individual_intent_remain_separate` |
 | Bounded eligible/suppressed/ended family and recovery diagnostics; Store v1/payload v2 unchanged | `test_bounded_diagnostics_distinguish_family_end_and_recovery_from_live_arming` |
 | Physical OFF/unavailable without persisted intent cannot create Manual-OFF | `test_physical_state_without_persisted_intent_cannot_restore_manual_off` |
+
+
+## Observation-to-rendering regressions (September 29)
+
+These extend the foundational matrix through the transitional legacy renderer. They do not
+claim full migration of automatic family policies or arbitrary external group inference.
+See [ADR 0004](adr/0004-normalized-ownership-intent.md).
+
+| Contract behavior | Executable coverage |
+|---|---|
+| Per-leaf Manual appearance -> OFF peel -> automatic -> second OFF Manual-OFF | `test_manual_peel_render_feedback_and_second_off`, HA-user and context-less paths, all four surfaces |
+| Consecutive leaves preserve sibling stacks while restores occur | `test_rapid_user_peels_do_not_inherit_sibling_restore_markers`, both evidence paths, all surfaces |
+| Scene identity survives sibling peeling | `test_scene_identity_then_individual_peel_during_scene_settling`, all surfaces |
+| Boundary rejects stale/ambiguous reports but current presentation closes quarantine | `test_boundary_closes_on_current_renderer_evidence_not_elapsed_time`, all surfaces; existing nightly rebound regressions |
+| Recovery/unavailable is not OFF or a completed renderer receipt | `test_recovery_off_with_live_marker_is_not_boundary_completion`; scene unavailable-member regression |
+| Restart does not reconstruct runtime interaction/quarantine | `test_restart_ignores_legacy_persisted_shutdown_epoch`; existing persistence/arming regressions |
+| Repair consequences cannot recreate Manual | `test_reconciliation_receipts_use_same_consequence_pipeline`, real adapter across all surfaces |
+| Renderer OFF cannot suppress a materially different new appearance | `test_renderer_off_does_not_create_manual_and_new_appearance_is_eligible`; PR #95/#97 regressions |
+| Guard alone cannot veto a direct homeowner command | `test_guard_without_exact_receipt_cannot_veto_user_intent`, all surfaces |
+| Sync churn is not homeowner intent | `test_sync_churn_is_evidence_not_new_manual_intent`; existing teardown regressions |
+| Provisional classification cannot be repaired against | `test_pending_correlation_defers_render_without_creating_manual`; bounded no-new-event expiry |
+| Initial device discovery cannot qualify as homeowner intent; later genuine command remains eligible | `test_initial_discovery_fanout_is_recovery_then_new_intent_is_eligible`, all surfaces |
+| Scene recall skips missing/unknown/unavailable members without recovery replay | `test_scene_recall_never_owns_unavailable_member`, all surfaces |
+| Unknown structural session state is not assumed inactive | `test_unknown_structural_session_is_not_assumed_off` |
+| Exact scene-group release consumes provisional barrier before restore and second OFF | `test_exact_scene_group_releases_barrier_then_second_off_during_restore_guard`, all surfaces |
+| Accepted ownership becomes visible before storage completes | `test_authority_is_published_before_disk_checkpoint_completes` |
+
+Context-less commands still require sufficient correlation. Identical same-operation telemetry
+inside a renderer marker window cannot be causally separated with current receipts alone;
+physical commissioning must characterize this limitation rather than claiming universal inference.

@@ -10,11 +10,12 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Callable
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
 from homeassistant.core import Event, HomeAssistant, State, callback
 from homeassistant.helpers.event import async_call_later
+from homeassistant.helpers.event import async_call_later as async_evidence_expiry
 from homeassistant.util import dt as dt_util
 
 from .attribution_correlation import (
@@ -31,6 +32,7 @@ from .intent_policy import (
     IntentDisposition,
     IntentEvidence,
     IntentEvidenceKind,
+    classify_intent,
 )
 from .model import Appearance, LayerKind
 from .operations import HomeownerOperation, MemberOutcome, OperationResult
@@ -69,12 +71,6 @@ _SCENE_RECALL_SOURCES: dict[str, tuple[str, str, str | None]] = {
     ),
 }
 
-# Front Eve is one physical Festavia leaf behind a one-member Hue aggregate. The
-# aggregate repeats the same bridge telemetry and therefore cannot independently
-# corroborate a context-less leaf command. Direct HA user context and genuine raw
-# Hue scene recall remain separate high-confidence homeowner evidence paths.
-_CONTEXTLESS_SINGLE_MEMBER_SURFACES = frozenset({"light.front_eve_zone"})
-
 # Hue can fan a large scene across the Backyard for several seconds while leaving
 # status.last_recall unchanged. Keep this separate from the ordinary 2-second
 # external-command burst so broad ambiguity does not become easier to promote.
@@ -105,6 +101,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         self._armed_off_attempts: deque[dict] = deque(maxlen=32)
         self._off_leaf_evidence: deque[dict] = deque(maxlen=64)
         self._pending_external_leaves: dict[str, _PendingExternalLeaf] = {}
+        self._pending_evidence_expiry: Callable[[], None] | None = None
         self._pending_single_promotions: dict[
             tuple[int | None, str], Callable[[], None]
         ] = {}
@@ -134,6 +131,23 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             return
         await self._async_scene_recall_changed(event, *source)
 
+    def _scoped_causal_evidence(self, guard_id: str, sync_entity_id: str | None, operation: str):
+        """Collect scope execution facts; the same pure classifier resolves them.
+
+        A guard is scene ambiguity evidence, not proof that qualified leaf OFF
+        receipts belong to HLM. Exact renderer OFF receipts are excluded upstream.
+        """
+        guard = self.hass.states.get(guard_id)
+        sync = self.hass.states.get(sync_entity_id) if sync_entity_id else None
+        return replace(
+            _correlated_homeowner_evidence(),
+            scene_guard_active=(operation == "appearance" and
+                                (guard is None or guard.state != "off")),
+            structural_activity=sync is not None and sync.state == "on",
+            structural_state_unknown=(sync_entity_id is not None
+                                      and (sync is None or sync.state not in ("on", "off"))),
+        )
+
     async def _async_scene_recall_changed(
         self,
         event: Event,
@@ -150,13 +164,16 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         old_ts = dt_util.parse_datetime(old_state.state)
         new_ts = dt_util.parse_datetime(new_state.state)
 
-        guard = self.hass.states.get(guard_id)
-        if guard is None or guard.state != "off":
+        recall_evidence = self._scoped_causal_evidence(guard_id, sync_entity_id, "appearance")
+        recall_decision = classify_intent(recall_evidence)
+        if not recall_decision.allows_homeowner_mutation:
+            self._record_evidence(
+                ShadowObservation(aggregate_id, recall_evidence),
+                ShadowDecision(aggregate_id, recall_decision, False, recall_decision.reason), new_state,
+                before=self._ownership_snapshot(aggregate_id),
+            )
+            self._publish_diagnostics()
             return
-        if sync_entity_id is not None:
-            sync = self.hass.states.get(sync_entity_id)
-            if sync is None or sync.state != "off":
-                return
 
         if old_ts is None or new_ts is None:
             return
@@ -226,17 +243,8 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             seconds=EXTERNAL_BURST_WINDOW_SECONDS
         )
 
-        for member in members:
-            self._post_boundary_off_entities.discard(member)
-
         sequence = self.runtime.reserve_sequence()
-        evidence = IntentEvidence(
-            kind=IntentEvidenceKind.CORRELATED_EXTERNAL_HOMEOWNER_COMMAND,
-            attribution_coherent=True,
-            attribution_source=IntentAttributionSource.UNATTRIBUTED_EXTERNAL,
-            has_user_id=False,
-            has_parent_id=False,
-        )
+        evidence = recall_evidence
         scene_name = new_state.attributes.get("scene_name")
         scene_evidence = (
             f"{event.data.get('entity_id')}:{new_state.state}:"
@@ -252,6 +260,10 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
                 members=tuple(
                     MemberOutcome(
                         member,
+                        available=(
+                            (state := self.hass.states.get(member)) is not None
+                            and state.state not in ("unknown", "unavailable")
+                        ),
                         appearance=Appearance(
                             on=True,
                             scene_id=scene_id,
@@ -288,6 +300,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             }
         )
         if result.mutated:
+            self._clear_post_boundary_off_for_members(result.affected)
             await self.async_save()
         else:
             self._publish_diagnostics()
@@ -321,6 +334,9 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         for _members, cancel in tuple(self._pending_overlapping_group_promotions.values()):
             cancel()
         self._pending_overlapping_group_promotions.clear()
+        if self._pending_evidence_expiry is not None:
+            self._pending_evidence_expiry()
+            self._pending_evidence_expiry = None
         self._pending_external_leaves.clear()
         self._external_group_burst_topology = {}
         self._external_group_last_observed_at = None
@@ -342,6 +358,9 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         for _members, cancel in tuple(self._pending_overlapping_group_promotions.values()):
             cancel()
         self._pending_overlapping_group_promotions.clear()
+        if self._pending_evidence_expiry is not None:
+            self._pending_evidence_expiry()
+            self._pending_evidence_expiry = None
         await super().async_shutdown()
 
     @callback
@@ -353,6 +372,9 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         for _members, cancel in tuple(self._pending_overlapping_group_promotions.values()):
             cancel()
         self._pending_overlapping_group_promotions.clear()
+        if self._pending_evidence_expiry is not None:
+            self._pending_evidence_expiry()
+            self._pending_evidence_expiry = None
         self._pending_external_leaves.clear()
         self._external_correlator.reset()
         self._external_burst = None
@@ -372,10 +394,13 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             observation.evidence.kind is IntentEvidenceKind.EXPLICIT_HOMEOWNER_COMMAND
             and observation.evidence.attribution_source
             is IntentAttributionSource.HOME_ASSISTANT_USER
+            and self._last_decision is not None and self._last_decision.mutated
         ):
             self._clear_post_boundary_off_for_entity(observation.entity_id)
         if (
-            observation.evidence.kind is IntentEvidenceKind.AVAILABILITY_CHANGE
+            observation.evidence.kind in (
+                IntentEvidenceKind.AVAILABILITY_CHANGE, IntentEvidenceKind.RECOVERY_TELEMETRY,
+            )
             or observation.evidence.has_parent_id
         ):
             self._off_leaf_evidence.append({
@@ -403,9 +428,11 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             self._reset_external_burst_for_cross_surface_leaf(observation.entity_id)
         self._snapshot_group_topology_for_burst(observed_at)
         automatic_reason = (
-            self._automatic_external_evidence_reason(observation.entity_id, new_state)
-            if not members
-            else None
+            classify_intent(observation.evidence).reason
+            if observation.evidence.kind in (
+                IntentEvidenceKind.AVAILABILITY_CHANGE, IntentEvidenceKind.RECOVERY_TELEMETRY,
+            ) else self._automatic_external_evidence_reason(observation.entity_id, new_state)
+            if not members else None
         )
         if automatic_reason is not None:
             self._pending_external_leaves.pop(observation.entity_id, None)
@@ -434,6 +461,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
                 observation=observation,
                 state=new_state,
             )
+            self._schedule_evidence_expiry()
         if not members:
             self._off_leaf_evidence.append({
                 "timestamp": observed_at.isoformat(), "entity_id": observation.entity_id,
@@ -449,6 +477,8 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         self._prune_pending_external_leaves(observed_at)
         self._record_recent_surface_appearance(observation, new_state, members, observed_at)
 
+        if automatic_reason is not None:
+            return
         super()._record_external_topology(observation, new_state)
         burst = self._external_burst
         if not isinstance(burst, dict):
@@ -581,47 +611,62 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             if entity_id in self._topology_members.get(aggregate_id, ())
         }
 
-    @callback
-    def _automatic_external_evidence_reason(
-        self, entity_id: str, new_state: State
-    ) -> str | None:
-        """Return why context-less leaf telemetry must not be promoted as homeowner intent."""
+    def _normalize_observation(self, observation: ShadowObservation, new_state: State):
+        observation = super()._normalize_observation(observation, new_state)
         now = dt_util.now()
-        for aggregate_id, settle_until in tuple(self._scene_recall_settle_until.items()):
-            if settle_until < now:
-                self._scene_recall_settle_until.pop(aggregate_id, None)
-                continue
-            if entity_id in self._topology_members.get(aggregate_id, ()):
-                return "authoritative Hue scene recall is settling on this surface"
+        for group, until in tuple(self._scene_recall_settle_until.items()):
+            if until < now:
+                self._scene_recall_settle_until.pop(group, None)
+        settling = observation.operation == "appearance" and any(
+            observation.entity_id in self._topology_members.get(group, ())
+            for group in self._scene_recall_settle_until
+        )
+        return replace(observation, evidence=replace(observation.evidence, scene_rendering=settling))
 
-        if (
-            entity_id in self.manual_precedence
-            and self._nightly_boundary_settling()
-        ):
-            return "nightly 01:59 boundary settling; ambiguous Hue telemetry defaults to HLM"
+    @callback
+    def _automatic_external_evidence_reason(self, entity_id: str, new_state: State) -> str | None:
+        """Ask the canonical policy whether causal facts exclude correlation."""
+        observation = self._normalize_observation(ShadowObservation(
+            entity_id, _correlated_homeowner_evidence(),
+            operation="off" if new_state.state == "off" else "appearance",
+        ), new_state)
+        decision = classify_intent(observation.evidence)
+        return None if decision.allows_homeowner_mutation else decision.reason
 
-        if self._in_post_boundary_off_epoch(entity_id):
-            return (
-                "post-boundary OFF epoch requires affirmative homeowner provenance; "
-                "context-less topology is ambiguous"
-            )
+    def _schedule_evidence_expiry(self) -> None:
+        """Publish expiry even without another event; never persist provisional scope."""
+        if self._pending_evidence_expiry is not None:
+            return
 
-        dynamics = new_state.attributes.get("dynamics")
-        if (
-            new_state.state != "off"
-            and isinstance(dynamics, str)
-            and dynamics not in ("", "none")
-        ):
-            return "active Hue dynamics are automatic scene telemetry"
+        @callback
+        def expire(_now):
+            self._pending_evidence_expiry = None
+            held = {key[1] for key in self._pending_single_promotions}
+            held.update(member for members, _ in self._pending_overlapping_group_promotions.values()
+                        for member in members)
+            now = dt_util.now()
+            for entity, item in tuple(self._pending_external_leaves.items()):
+                if entity not in held and (now - item.observed_at).total_seconds() >= (
+                    self._surface_group_off_hold_seconds(entity, item.observation.operation)
+                ):
+                    self._pending_external_leaves.pop(entity, None)
+            self._publish_diagnostics()
+            if self._pending_external_leaves:
+                self._schedule_evidence_expiry()
 
-        operation = "off" if new_state.state == "off" else "appearance"
-        guard_id = self._active_guard_for_ha_consequence(entity_id, operation)
-        if guard_id is not None:
-            return (
-                f"HA command guard is active for this entity and operation "
-                f"{operation}: {guard_id}"
-            )
-        return None
+        self._pending_evidence_expiry = async_evidence_expiry(
+            self.hass, EXTERNAL_BURST_WINDOW_SECONDS + 0.05, expire,
+        )
+
+    def pending_intent_entities(self) -> tuple[str, ...]:
+        pending = getattr(self, "_pending_external_leaves", {})
+        now = dt_util.now()
+        held = {key[1] for key in getattr(self, "_pending_single_promotions", {})}
+        held.update(member for members, _ in getattr(
+            self, "_pending_overlapping_group_promotions", {}).values() for member in members)
+        return tuple(sorted(entity for entity, item in pending.items()
+                            if entity in held or 0 <= (now - item.observed_at).total_seconds()
+                            <= self._surface_group_off_hold_seconds(entity, item.observation.operation)))
 
     @callback
     def _snapshot_group_topology_for_burst(self, observed_at: datetime) -> None:
@@ -709,27 +754,6 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         """Promote a leaf immediately unless a pre-known group burst may still resolve."""
         entity_id = candidate.get("entity_id")
         if not isinstance(entity_id, str):
-            return
-
-        if (
-            current_entity_id in _CONTEXTLESS_SINGLE_MEMBER_SURFACES
-            and members == (entity_id,)
-        ):
-            # A one-member Hue aggregate is propagation of the same physical receipt,
-            # not independent evidence that a context-less leaf transition was homeowner
-            # intent. The 2026-09-22 Front Eve rebound had exactly this topology.
-            self._pending_external_leaves.pop(entity_id, None)
-            self._cancel_pending_single_for_entities((entity_id,))
-            candidate.update(
-                {
-                    "promoted_to_homeowner": False,
-                    "manual_ownership_recorded": False,
-                    "promotion_reason": (
-                        "single-member Front Eve aggregate is not independent "
-                        "homeowner corroboration"
-                    ),
-                }
-            )
             return
 
         # A later leaf command needs fresh aggregate corroboration. Reusing the burst start
@@ -851,7 +875,9 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         """Apply one retained leaf observation through the existing core path."""
         promoted_observation = ShadowObservation(
             entity_id=pending.observation.entity_id,
-            evidence=_correlated_homeowner_evidence(),
+            evidence=replace(pending.observation.evidence,
+                             kind=IntentEvidenceKind.CORRELATED_EXTERNAL_HOMEOWNER_COMMAND,
+                             attribution_coherent=True),
             appearance=pending.observation.appearance,
             operation=pending.observation.operation,
             manual_precedence=pending.observation.manual_precedence,
@@ -859,16 +885,24 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             generation=pending.observation.generation,
             operation_id=pending.observation.operation_id,
         )
+        before = self._ownership_snapshot(promoted_observation.entity_id)
         decision = self.runtime.observe(promoted_observation)
-        self._record_evidence(promoted_observation, decision, pending.state)
+        self._last_decision = decision
+        self._record_evidence(promoted_observation, decision, pending.state, before=before)
 
         outcome = _promotion_outcome(decision)
         candidate.update(outcome)
         self._last_external_promotion_key = promotion_key
         self._last_external_promotion_outcome = outcome
 
+        self._pending_external_leaves.pop(pending.observation.entity_id, None)
         if decision.mutated:
-            self.hass.async_create_task(self.async_save())
+            self._clear_post_boundary_off_for_entity(pending.observation.entity_id)
+            self._external_correlator.reset()
+            self._external_group_last_observed_at = None
+            self._checkpoint_ownership()
+        else:
+            self._publish_diagnostics()
 
     @callback
     def _cancel_pending_single_for_entities(self, entity_ids: tuple[str, ...]) -> None:
@@ -995,13 +1029,9 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         )
         if source is not None:
             _, guard_id, sync_entity_id = source
-            guard = self.hass.states.get(guard_id)
-            if guard is None or guard.state != "off":
-                return reject("rejected_guard_not_off")
-            if sync_entity_id is not None:
-                sync = self.hass.states.get(sync_entity_id)
-                if sync is None or sync.state != "off":
-                    return reject("rejected_sync_not_off")
+            policy = classify_intent(self._scoped_causal_evidence(guard_id, sync_entity_id, "off"))
+            if not policy.allows_homeowner_mutation:
+                return reject(policy.reason)
 
             # Commissioned canonical surfaces get the bounded slow-Hue path,
             # while preserving the established gate diagnostics.
@@ -1088,7 +1118,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             self._external_burst = None
             self._external_group_burst_topology = {}
             self._external_group_last_observed_at = None
-            self.hass.async_create_task(self.async_save())
+            self._checkpoint_ownership()
         return True
 
     @callback
@@ -1120,13 +1150,9 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         if source is None:
             return False
         _, guard_id, sync_entity_id = source
-        guard = self.hass.states.get(guard_id)
-        if guard is None or guard.state != "off":
+        policy = classify_intent(self._scoped_causal_evidence(guard_id, sync_entity_id, "off"))
+        if not policy.allows_homeowner_mutation:
             return False
-        if sync_entity_id is not None:
-            sync = self.hass.states.get(sync_entity_id)
-            if sync is None or sync.state != "off":
-                return False
 
         exact_members = self._managed_group_members(members)
 
@@ -1185,8 +1211,17 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         )
         outcome = _promotion_outcome(result)
         candidate.update(outcome)
+        for item in retained:
+            if self._pending_external_leaves.get(item.observation.entity_id) is item:
+                self._pending_external_leaves.pop(item.observation.entity_id, None)
+        self._last_decision = ShadowDecision(current_entity_id, result.intent, result.mutated, result.reason)
         if result.mutated:
-            self.hass.async_create_task(self.async_save())
+            self._clear_post_boundary_off_for_members(result.affected)
+            self._external_correlator.reset()
+            self._external_group_last_observed_at = None
+            self._checkpoint_ownership()
+        else:
+            self._publish_diagnostics()
         return True
 
     @callback
@@ -1231,13 +1266,9 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             if source is None:
                 continue
             _surface_id, guard_id, sync_entity_id = source
-            guard = self.hass.states.get(guard_id)
-            if guard is None or guard.state != "off":
+            policy = classify_intent(self._scoped_causal_evidence(guard_id, sync_entity_id, "appearance"))
+            if not policy.allows_homeowner_mutation:
                 continue
-            if sync_entity_id is not None:
-                sync = self.hass.states.get(sync_entity_id)
-                if sync is None or sync.state != "off":
-                    continue
 
             evidence = self._scene_displacement_evidence.setdefault(
                 aggregate_id,
@@ -1328,7 +1359,7 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
                 self._external_burst = None
                 self._external_group_burst_topology = {}
                 self._external_group_last_observed_at = None
-                self.hass.async_create_task(self.async_save())
+                self._checkpoint_ownership()
             return result.mutated
 
         return False
@@ -1617,8 +1648,17 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         self._last_external_group_promotion_key = promotion_key
         self._last_external_group_promotion_outcome = outcome
 
+        for item in retained:
+            current = self._pending_external_leaves.get(item.observation.entity_id)
+            if current is item:
+                self._pending_external_leaves.pop(item.observation.entity_id, None)
         if result.mutated:
-            self.hass.async_create_task(self.async_save())
+            self._clear_post_boundary_off_for_members(result.affected)
+            self._external_correlator.reset()
+            self._external_group_last_observed_at = None
+            self._checkpoint_ownership()
+        else:
+            self._publish_diagnostics()
 
     @callback
     def _prune_pending_external_leaves(self, now: datetime) -> None:

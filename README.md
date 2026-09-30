@@ -28,6 +28,14 @@ and the remaining functional/alert snapshot policies are not claimed as fully mi
 Deployment requires the matching legacy integration, package and HLM code; an HLM-only HACS update
 cannot install this package bridge. Physical commissioning remains a separate approval step.
 
+## Canonical ownership intent
+
+[ADR 0004](docs/adr/0004-normalized-ownership-intent.md) and the
+[September 29 audit](docs/reviews/unified-intent-audit.md) describe normalized causal evidence,
+per-leaf boundary lifecycle, current ownership publication and provisional rendering barriers.
+Renderer and reconciliation consequences share exact target/operation attribution; guards
+alone do not determine ownership. Physical commissioning remains required.
+
 ## Managed surfaces
 
 The current installation manages:

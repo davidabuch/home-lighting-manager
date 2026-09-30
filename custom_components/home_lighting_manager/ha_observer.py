@@ -143,11 +143,8 @@ class HomeAssistantShadowObserver:
         self.runtime = ShadowRuntime(generation=generation, managed_entities=self.entity_ids)
 
         if isinstance(raw, dict):
-            self._post_boundary_off_entities = {
-                entity_id
-                for entity_id in raw.get("post_boundary_off_entities", [])
-                if isinstance(entity_id, str) and entity_id in self.entity_ids
-            }
+            # Runtime quarantine is not durable ownership. Ignore legacy epoch
+            # fields; restart cannot reconstruct causal continuity from storage.
             persisted = deserialize_state(raw)
             saved_at = _parse_saved_at(raw.get("saved_at"))
             now = dt_util.now()
@@ -211,14 +208,18 @@ class HomeAssistantShadowObserver:
         await self.async_save()
         return result
 
+    @callback
+    def _checkpoint_ownership(self) -> None:
+        """Publish current authority before any persistence await or deferred task."""
+        self._publish_diagnostics()
+        self.hass.async_create_task(self.async_save())
+
     async def async_save(self) -> None:
-        """Persist only contractually durable shadow evidence."""
+        """Persist durable evidence; disk latency must not delay the authority view."""
+        self._publish_diagnostics()
         payload = self.runtime.export_persistence()
         payload["generation"] = self.runtime.engine.generation
         payload["saved_at"] = dt_util.now().isoformat()
-        payload["post_boundary_off_entities"] = sorted(
-            self._post_boundary_off_entities
-        )
         payload["managed_surface_members"] = {
             surface: list(self._surface_members_by_group.get(group_id, ()))
             for surface, group_id in MANAGED_SURFACE_GROUPS.items()
@@ -250,21 +251,35 @@ class HomeAssistantShadowObserver:
         if observation is None:
             return
 
-        observation = self._apply_ha_guard_attribution(entity_id, observation)
+        observation = self._normalize_observation(observation, new_state)
+        if (observation.evidence.renderer_consequence
+            and observation.evidence.kind not in (
+                IntentEvidenceKind.AVAILABILITY_CHANGE, IntentEvidenceKind.RECOVERY_TELEMETRY,
+            )
+            and observation.operation == "appearance"
+            and not self._member_entity_ids_for_event(entity_id, new_state)):
+            # A witnessed command receipt closes shutdown causality; evidence queries
+            # and raw ON alone never do. Recovery receipts are excluded above.
+            self._clear_post_boundary_off_for_entity(entity_id)
+            observation = replace(observation, evidence=replace(
+                observation.evidence, boundary_shutdown_pending=False,
+            ))
 
         if self._member_entity_ids_for_event(entity_id, new_state):
             observation = replace(observation, evidence=replace(
-                observation.evidence, kind=IntentEvidenceKind.UNKNOWN, attribution_coherent=False
+                observation.evidence, aggregate_receipt=True
             ))  # Aggregate telemetry is not an explicit group-operation receipt.
         observation = replace(
             observation,
             sequence=self.runtime.reserve_sequence(),
             generation=self.runtime.engine.generation,
         )
-        self._last_decision = self.runtime.observe(observation)
+        before = self._ownership_snapshot(entity_id)
+        decision = self.runtime.observe(observation)
+        self._last_decision = decision
+        self._record_evidence(observation, decision, new_state, before=before)
         self._record_external_topology(observation, new_state)
-        self._record_evidence(observation, self._last_decision, new_state)
-        if self._last_decision.mutated:
+        if decision.mutated:
             await self.async_save()
         else:
             self._publish_diagnostics()
@@ -273,41 +288,49 @@ class HomeAssistantShadowObserver:
     def _apply_ha_guard_attribution(
         self, entity_id: str, observation: ShadowObservation
     ) -> ShadowObservation:
-        """Mark HA-originated writes under the active surface guard as HLM-owned.
+        """Collect exact renderer consequence evidence, even when Hue strips context.
 
-        The legacy renderer raises a short per-surface guard around its own physical
-        writes. Only HA-attributed events are rewritten here; unattributed external
-        Hue/HomeKit events retain normal homeowner-correlation eligibility.
+        A surface guard alone cannot override an unrelated homeowner operation.
+        This collector never changes ownership or closes boundary quarantine.
         """
-        source = observation.evidence.attribution_source
-        if source not in (
-            IntentAttributionSource.HOME_ASSISTANT_USER,
-            IntentAttributionSource.HOME_ASSISTANT_CHAIN,
-        ):
+        marker = self._active_guard_for_ha_consequence(entity_id, observation.operation)
+        if marker is None:
             return observation
+        return replace(observation, evidence=replace(
+            observation.evidence, renderer_consequence=True,
+            kind=(observation.evidence.kind
+                  if observation.evidence.kind in (
+                      IntentEvidenceKind.AVAILABILITY_CHANGE, IntentEvidenceKind.RECOVERY_TELEMETRY,
+                  )
+                  else IntentEvidenceKind.HLM_COMMAND_CONSEQUENCE),
+        ), operation_id=None)
 
-        for surface, group_id in MANAGED_SURFACE_GROUPS.items():
-            members = self._surface_members_by_group.get(group_id, ())
-            if entity_id not in members:
-                continue
-            guard = MANAGED_SURFACE_GUARDS[surface]
-            if not self.hass.states.is_state(guard, STATE_ON):
-                return observation
-            self._guarded_ha_consequence_entities[entity_id] = (
-                guard,
-                observation.operation,
-                dt_util.now(),
+    def _normalize_observation(self, observation: ShadowObservation, new_state: State):
+        """Collect causal facts; ownership policy lives in classify_intent."""
+        observation = self._apply_ha_guard_attribution(observation.entity_id, observation)
+        dynamics = new_state.attributes.get("dynamics")
+        structural_states = [
+            self.hass.states.get(sensor)
+            for group, sensor in (
+                (MANAGED_SURFACE_GROUPS["main_area"], "binary_sensor.hue_bridge_living_room"),
+                (MANAGED_SURFACE_GROUPS["backyard"], "binary_sensor.hue_bridge_backyard"),
             )
-            return replace(
-                observation,
-                evidence=replace(
-                    observation.evidence,
-                    kind=IntentEvidenceKind.HLM_COMMAND_CONSEQUENCE,
-                    attribution_coherent=True,
-                ),
-                operation_id=None,
-            )
-        return observation
+            if observation.entity_id in self._surface_members_by_group.get(group, ())
+        ]
+        return replace(observation, evidence=replace(
+            observation.evidence,
+            boundary_settling=self._nightly_boundary_settling(),
+            boundary_shutdown_pending=self._in_post_boundary_off_epoch(observation.entity_id),
+            structural_activity=any(
+                state is not None and state.state == STATE_ON for state in structural_states
+            ),
+            structural_state_unknown=any(
+                state is None or state.state not in (STATE_ON, STATE_OFF)
+                for state in structural_states
+            ),
+            dynamic_telemetry=(observation.operation != "off" and isinstance(dynamics, str)
+                               and dynamics not in ("", "none")),
+        ))
 
     @callback
     def register_renderer_command_consequences(
@@ -393,8 +416,19 @@ class HomeAssistantShadowObserver:
         self._external_burst = summary.as_dict()
 
     @callback
+    def _ownership_snapshot(self, entity_id: str) -> dict:
+        layer = self.runtime.engine.resolve(entity_id).layer
+        return {
+            "exposed_kind": layer.kind.value if layer else None,
+            "exposed_owner": layer.owner if layer else None,
+            "layers": [item.layer_id for item in self.runtime.engine.layers(entity_id)],
+            "protected": entity_id in self.runtime.reconciliation_protected_entities(),
+        }
+
+    @callback
     def _record_evidence(
-        self, observation: ShadowObservation, decision: ShadowDecision, new_state: State
+        self, observation: ShadowObservation, decision: ShadowDecision, new_state: State,
+        *, before: dict | None = None,
     ) -> None:
         """Record a bounded, non-commanding attribution ledger for commissioning."""
         evidence = observation.evidence
@@ -408,6 +442,16 @@ class HomeAssistantShadowObserver:
                 "operation": observation.operation,
                 "evidence_kind": evidence.kind.value,
                 "attribution_source": evidence.attribution_source.value,
+                "normalized_causality": {
+                    name: getattr(evidence, name) for name in (
+                        "renderer_consequence", "aggregate_receipt", "boundary_settling",
+                        "boundary_shutdown_pending", "scene_rendering", "dynamic_telemetry",
+                        "structural_activity", "structural_state_unknown", "scene_guard_active",
+                    )
+                },
+                "canonical_reason": decision.intent.reason,
+                "ownership_before": before,
+                "ownership_after": self._ownership_snapshot(observation.entity_id),
                 "user_context": evidence.has_user_id,
                 "parent_context": evidence.has_parent_id,
                 "entity_role": "aggregate" if members else "leaf",
@@ -571,7 +615,7 @@ class HomeAssistantShadowObserver:
         self._managed_membership_changed(added, removed)
         self._publish_diagnostics()
         if self._unsubscribers and self.hass.is_running:
-            self.hass.async_create_task(self.async_save())
+            self._checkpoint_ownership()
 
     @callback
     def _schedule_membership_confirmation(self) -> None:
@@ -640,16 +684,16 @@ class HomeAssistantShadowObserver:
         )
         self._post_boundary_off_entities = self._boundary_managed_entities()
         self.runtime.engine.expire_boundary(NIGHTLY_BOUNDARY)
-        self.hass.async_create_task(self.async_save())
+        self._checkpoint_ownership()
 
     @callback
     def _clear_post_boundary_off_for_entity(self, entity_id: str) -> None:
-        """Re-open homeowner correlation only after affirmative post-boundary evidence."""
+        """Close shutdown causality after affirmative current evidence."""
         self._post_boundary_off_entities.discard(entity_id)
 
     @callback
     def _clear_post_boundary_off_for_members(self, entity_ids: tuple[str, ...]) -> None:
-        """Clear the persisted OFF epoch for positively established members."""
+        """Close runtime shutdown quarantine for positively established members."""
         self._post_boundary_off_entities.difference_update(entity_ids)
 
     @callback
@@ -692,6 +736,10 @@ class HomeAssistantShadowObserver:
     async def _async_stop_event(self, _event: Event) -> None:
         await self.async_save()
 
+    def pending_intent_entities(self) -> tuple[str, ...]:
+        """Provisional evidence is not ownership but must settle before repair."""
+        return ()
+
     def off_attempt_diagnostics(self) -> dict:
         """Optional read-only commissioning evidence supplied by the promotion adapter."""
         return {}
@@ -700,6 +748,7 @@ class HomeAssistantShadowObserver:
     def _publish_diagnostics(self) -> None:
         diagnostics = self.runtime.diagnostics()
         attrs: dict[str, Any] = {
+            "pending_intent_entities": list(self.pending_intent_entities()),
             "generation": diagnostics.generation,
             "effective_ownership": effective_ownership(
                 self.runtime.engine, set(self.entity_ids) - set(self._topology_members),
@@ -790,6 +839,14 @@ def observation_from_state_change(
     has_user_id = context.user_id is not None
     has_parent_id = context.parent_id is not None
     explicit_user = has_user_id and not has_parent_id
+    if old_state is None and not explicit_user:
+        # First discovery/startup reports are availability evidence, not a command.
+        # Aggregate fanout cannot turn bootstrap telemetry into homeowner intent.
+        return ShadowObservation(entity_id, IntentEvidence(
+            IntentEvidenceKind.RECOVERY_TELEMETRY,
+            attribution_source=_attribution_source_from_context(context),
+            has_user_id=has_user_id, has_parent_id=has_parent_id,
+        ))
     evidence = IntentEvidence(
         kind=(
             IntentEvidenceKind.EXPLICIT_HOMEOWNER_COMMAND

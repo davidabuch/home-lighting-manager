@@ -3,6 +3,7 @@
 from unittest.mock import patch
 
 import pytest
+from conftest import seed_observed_lights
 from homeassistant.core import Context, HomeAssistant
 
 from custom_components.home_lighting_manager.ha_observer import DIAGNOSTIC_ENTITY_ID
@@ -16,6 +17,7 @@ async def observer_for(tmp_path, entities):
     hass = HomeAssistant(str(tmp_path))
     hass.config.time_zone = "America/Los_Angeles"
     observer = PromotingHomeAssistantShadowObserver(hass, entities, dict.fromkeys(entities, 250))
+    seed_observed_lights(hass, entities)
     await observer.async_start()
     return hass, observer
 
@@ -330,7 +332,8 @@ async def test_guarded_automatic_right_ceiling_burst_does_not_create_manual(tmp_
     try:
         await seed_group(hass, group, (leaf,), state="on")
         hass.states.async_set(guard, "on")
-        # The actual HA command receipt marks only this leaf as an HLM consequence.
+        assert observer.register_renderer_command_consequences([leaf], guard, "appearance") == 1
+        # The exact renderer receipt marks only this leaf as an HLM consequence.
         hass.states.async_set(
             leaf,
             "on",
@@ -367,7 +370,7 @@ async def test_guarded_automatic_right_ceiling_burst_does_not_create_manual(tmp_
         assert not observer.runtime.operations.history
         attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
         candidate = attrs["external_burst"]["external_intent_candidate"]
-        assert candidate["qualified"] is True
+        assert candidate["qualified"] is False
         assert candidate["promoted_to_homeowner"] is False
         assert attrs["command_authority"] is False
     finally:
@@ -409,7 +412,7 @@ async def test_hue_dynamic_palette_churn_does_not_create_manual(tmp_path):
         assert not observer.runtime.operations.history
         attrs = hass.states.get(DIAGNOSTIC_ENTITY_ID).attributes
         candidate = attrs["external_burst"]["external_intent_candidate"]
-        assert candidate["qualified"] is True
+        assert candidate["qualified"] is False
         assert candidate["promoted_to_homeowner"] is False
         assert attrs["command_authority"] is False
     finally:
@@ -1860,6 +1863,7 @@ async def test_surface_guard_is_scoped_to_entity_actually_commanded_by_ha(
         hass.states.async_set(guard, "on")
         await hass.async_block_till_done()
 
+        assert observer.register_renderer_command_consequences([left], guard, "appearance") == 1
         # HLM restores only left; this must scope the guard consequence to left.
         hass.states.async_set(
             left,
@@ -1871,7 +1875,7 @@ async def test_surface_guard_is_scoped_to_entity_actually_commanded_by_ha(
 
         assert observer._active_guard_for_ha_consequence(left, "appearance") == guard
         assert observer._active_guard_for_ha_consequence(right, "appearance") is None
-        assert "HA command guard is active for this entity" in (
+        assert "exact renderer target/operation consequence" in (
             observer._automatic_external_evidence_reason(left, hass.states.get(left)) or ""
         )
         assert observer._automatic_external_evidence_reason(
@@ -1895,6 +1899,7 @@ async def test_main_area_second_leaf_off_is_retained_during_other_leaf_restore_g
         hass.states.async_set(guard, "on")
         await hass.async_block_till_done()
 
+        assert observer.register_renderer_command_consequences([left], guard, "appearance") == 1
         # HLM restores left, so only left is entitled to guard suppression.
         hass.states.async_set(
             left,
@@ -1960,7 +1965,7 @@ async def test_explicit_renderer_marker_blocks_false_manual_repromotion(tmp_path
             if item.get("entity_id") == leaf
         ]
         assert evidence
-        assert "HA command guard is active for this entity" in evidence[-1]["result"]
+        assert "exact renderer target/operation consequence" in evidence[-1]["result"]
     finally:
         await observer.async_shutdown()
         await hass.async_block_till_done()

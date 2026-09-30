@@ -128,8 +128,11 @@ def verify(owners, states, scripts, members, scene_info, suppressed=None):
         if surface not in members or not members[surface]:
             out.issues.append({"surface": surface, "error": "unresolved group membership"})
             continue
+        pending_intent = set(owners[surface].get("pending_intent_entities", ()))
+        if pending_intent:
+            out.skipped[surface] = "provisional intent: " + ",".join(sorted(pending_intent)[:32])
         for entity in owners[surface].get("manual_off_entities", ()):
-            if entity in members[surface] and not (entity == LIQUOR and door):
+            if entity not in pending_intent and entity in members[surface] and not (entity == LIQUOR and door):
                 _static(out, surface, states, "light.turn_off", entity, {"transition": 0})
         if owner == "off":
             for entity in members[surface]:

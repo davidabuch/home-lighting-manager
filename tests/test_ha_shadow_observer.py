@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
 from pathlib import Path
 
 import pytest
@@ -805,3 +806,56 @@ async def test_shadow_health_publishes_migration_and_reconciliation_protection(r
     assert health.attributes["command_authority"] is False
     assert health.attributes["manual_precedence_entities"] == [entity]
     assert health.attributes["reconciliation_protected_entities"] == [entity]
+
+
+@pytest.mark.asyncio
+async def test_shadow_health_attributes_stay_below_recorder_limit(tmp_path):
+    """A production-sized observer must remain recordable by Home Assistant."""
+    from homeassistant.core import HomeAssistant
+
+    from custom_components.home_lighting_manager.ha_observer import (
+        DIAGNOSTIC_ENTITY_ID,
+        HomeAssistantShadowObserver,
+    )
+
+    hass = HomeAssistant(str(tmp_path))
+    entities = [f"light.synthetic_{index:03d}" for index in range(95)]
+    precedence = {entity_id: 250 for entity_id in entities[:26]}
+    observer = HomeAssistantShadowObserver(hass, entities, precedence)
+
+    # Fill the in-memory evidence ledger with realistic verbose records. The
+    # published sensor must expose only its bounded recorder-safe tail.
+    for index in range(12):
+        observer._evidence_ledger.append(
+            {
+                "timestamp": f"2026-10-01T12:00:{index:02d}-07:00",
+                "entity_id": entities[index],
+                "operation": "appearance",
+                "evidence_kind": "unknown",
+                "attribution_source": "unattributed_external",
+                "normalized_causality": {
+                    "renderer_consequence": False,
+                    "aggregate_receipt": False,
+                    "boundary_settling": False,
+                    "boundary_shutdown_pending": False,
+                    "scene_rendering": False,
+                    "dynamic_telemetry": False,
+                    "structural_activity": False,
+                    "structural_state_unknown": False,
+                    "scene_guard_active": False,
+                },
+                "canonical_reason": "synthetic verbose evidence for recorder budget",
+                "ownership_before": {"layers": [], "protected": False},
+                "ownership_after": {"layers": [], "protected": False},
+                "intent": "hlm_owned",
+                "mutated": False,
+            }
+        )
+
+    observer._publish_diagnostics()
+    state = hass.states.get(DIAGNOSTIC_ENTITY_ID)
+    assert state is not None
+    encoded = json.dumps(dict(state.attributes), separators=(",", ":"), default=str)
+    assert len(encoded.encode()) < 16_384
+    assert len(state.attributes["recent_evidence"]) == 2
+    assert len(state.attributes["effective_ownership"]["entities"]) == 26

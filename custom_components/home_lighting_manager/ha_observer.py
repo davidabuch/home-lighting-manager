@@ -746,13 +746,39 @@ class HomeAssistantShadowObserver:
 
     @callback
     def _publish_diagnostics(self) -> None:
+        """Publish a recorder-safe operational contract and bounded diagnostics.
+
+        The observer retains its full bounded evidence ledgers in memory. Home
+        Assistant's state machine is intentionally narrower because Recorder
+        rejects state attributes larger than 16 KiB.
+        """
         diagnostics = self.runtime.diagnostics()
+
+        projection_entities = set(self.manual_precedence)
+        projection_groups: dict[str, tuple[str, ...]] = {}
+        for group_id in MANAGED_SURFACE_GROUPS.values():
+            members = self._surface_members_by_group.get(group_id, ())
+            projection_entities.update(members)
+            if members:
+                projection_groups[group_id] = members
+
+        ownership = self.runtime.ownership_diagnostics()
+        published_ownership_entities = {
+            entity_id: record
+            for entity_id, record in ownership.get("ownership_entities", {}).items()
+            if record.get("layers")
+            or record.get("manual_appearance")
+            or record.get("manual_off")
+        }
+
+        off_diagnostics = self.off_attempt_diagnostics()
         attrs: dict[str, Any] = {
             "pending_intent_entities": list(self.pending_intent_entities()),
             "generation": diagnostics.generation,
             "effective_ownership": effective_ownership(
-                self.runtime.engine, set(self.entity_ids) - set(self._topology_members),
-                {g: m for g, m in self._topology_members.items() if g in self.entity_ids}
+                self.runtime.engine,
+                projection_entities,
+                projection_groups,
             ),
             "observed_events": diagnostics.observed_events,
             "homeowner_events": diagnostics.homeowner_events,
@@ -770,7 +796,7 @@ class HomeAssistantShadowObserver:
             "storage_status": self._storage_status,
             "command_authority": False,
             "evidence_ledger_size": EVIDENCE_LEDGER_SIZE,
-            "recent_evidence": list(self._evidence_ledger),
+            "recent_evidence": list(self._evidence_ledger)[-2:],
             "external_burst_window_seconds": EXTERNAL_BURST_WINDOW_SECONDS,
             "external_burst": self._external_burst,
             "nightly_boundary_settle_seconds": NIGHTLY_BOUNDARY_SETTLE_SECONDS,
@@ -785,7 +811,7 @@ class HomeAssistantShadowObserver:
             "topology_member_count": sum(
                 len(members) for members in self._topology_members.values()
             ),
-            "topology_aggregate_entities": sorted(self._topology_members)[:32],
+            "topology_aggregate_entities": sorted(self._topology_members)[:8],
             "topology_cache_ready": bool(self._topology_members),
             "managed_surface_groups": dict(MANAGED_SURFACE_GROUPS),
             "managed_surface_members": {
@@ -798,9 +824,24 @@ class HomeAssistantShadowObserver:
                 if items
             },
             "managed_surface_manual_precedence": SURFACE_MANUAL_PRECEDENCE,
+            "runtime_revision": ownership.get("runtime_revision"),
+            "ownership_entities": published_ownership_entities,
+            "ownership_entities_truncated": ownership.get(
+                "ownership_entities_truncated", False
+            ),
+            "family_sessions": ownership.get("family_sessions", []),
+            "ended_family_sessions": ownership.get("ended_family_sessions", []),
+            "group_off_sequences": ownership.get("group_off_sequences", {}),
+            "group_off_removals": ownership.get("group_off_removals", {}),
+            "last_mutation_reason": ownership.get("last_mutation_reason"),
+            "latest_homeowner_operation": ownership.get("latest_homeowner_operation"),
+            "latest_operation_rejection": ownership.get("latest_operation_rejection"),
+            "recent_operations": list(ownership.get("recent_operations", []))[-4:],
+            "armed_group_off_attempts": list(
+                off_diagnostics.get("armed_group_off_attempts", [])
+            )[-4:],
+            "off_leaf_evidence": list(off_diagnostics.get("off_leaf_evidence", []))[-8:],
         }
-        attrs.update(self.runtime.ownership_diagnostics())
-        attrs.update(self.off_attempt_diagnostics())
         if self._last_decision is not None:
             attrs.update(
                 {

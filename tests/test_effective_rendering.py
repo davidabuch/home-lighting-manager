@@ -558,8 +558,8 @@ def test_effective_ownership_compacts_unowned_records_without_losing_manual_cont
     runtime = ShadowRuntime(managed_entities=frozenset(entities))
 
     empty = effective_ownership(runtime.engine, entities)
-    assert empty["entities"]["light.test_a"] == {"protected": False}
-    assert empty["entities"]["light.test_b"] == {"protected": False}
+    assert empty["entities"]["light.test_a"] == {"owner": None, "kind": None, "protected": False}
+    assert empty["entities"]["light.test_b"] == {"owner": None, "kind": None, "protected": False}
 
     runtime.observe_operation(operation(1, members=("light.test_a",), kind="off"))
     projected = effective_ownership(runtime.engine, entities)
@@ -569,4 +569,4 @@ def test_effective_ownership_compacts_unowned_records_without_losing_manual_cont
     assert manual_off["kind"] == "manual_off"
     assert manual_off["protected"] is True
     assert manual_off["desired"]["on"] is False
-    assert projected["entities"]["light.test_b"] == {"protected": False}
+    assert projected["entities"]["light.test_b"] == {"owner": None, "kind": None, "protected": False}

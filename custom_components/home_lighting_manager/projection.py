@@ -14,7 +14,7 @@ def effective_ownership(engine, entities, groups=None):
             # Most managed entities have no HLM-owned overlay. Keep those records
             # intentionally tiny because the projection is exposed as HA sensor
             # attributes and Recorder rejects states above 16 KiB.
-            records[entity] = {"protected": False}
+            records[entity] = {"owner": None, "kind": None, "protected": False}
             continue
         records[entity] = {
             "owner": layer.owner,

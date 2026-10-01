@@ -324,8 +324,12 @@ async def test_diagnostic_evidence_ledger_is_bounded_and_explains_unattributed_e
 
     diagnostics = hass.states.get(DIAGNOSTIC_ENTITY_ID)
     assert diagnostics is not None
+
+    # Preserve the full bounded commissioning ledger in memory while exposing
+    # only a recorder-safe tail through Home Assistant state attributes.
+    assert len(observer._evidence_ledger) == EVIDENCE_LEDGER_SIZE
     ledger = diagnostics.attributes["recent_evidence"]
-    assert len(ledger) == EVIDENCE_LEDGER_SIZE
+    assert len(ledger) == 2
     assert ledger[-1]["entity_id"] == "light.shadow_test"
     assert ledger[-1]["attribution_source"] == "unattributed_external"
     assert ledger[-1]["intent"] == "hlm_owned"

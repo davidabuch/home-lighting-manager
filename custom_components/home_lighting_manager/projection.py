@@ -10,20 +10,26 @@ def effective_ownership(engine, entities, groups=None):
     records = {}
     for entity in sorted(set(entities)):
         layer = engine.resolve(entity).layer
+        if layer is None:
+            # Most managed entities have no HLM-owned overlay. Keep those records
+            # intentionally tiny because the projection is exposed as HA sensor
+            # attributes and Recorder rejects states above 16 KiB.
+            records[entity] = {"protected": False}
+            continue
         records[entity] = {
-            "owner": layer.owner if layer else None,
-            "kind": layer.kind.value if layer else None,
-            "desired": asdict(layer.appearance) if layer and layer.appearance else None,
-            "protected": bool(layer and layer.kind != LayerKind.AUTOMATIC),
+            "owner": layer.owner,
+            "kind": layer.kind.value,
+            "desired": asdict(layer.appearance) if layer.appearance else None,
+            "protected": layer.kind != LayerKind.AUTOMATIC,
             "underlying_automatic": [
                 {"owner": item.owner, "family": item.family, "session_id": item.session_id}
                 for item in engine.layers(entity)
                 if item.kind == LayerKind.AUTOMATIC and engine.layer_eligible(entity, item)
             ],
-            "layer_id": layer.layer_id if layer else None,
-            "group_id": layer.group_id if layer else None,
-            "family": layer.family if layer else None,
-            "session_id": layer.session_id if layer else None,
+            "layer_id": layer.layer_id,
+            "group_id": layer.group_id,
+            "family": layer.family,
+            "session_id": layer.session_id,
         }
     token = engine.work_token()
     return {

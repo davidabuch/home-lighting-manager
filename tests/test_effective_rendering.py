@@ -550,3 +550,23 @@ async def test_renderer_marks_each_leaf_before_physical_light_dispatch(rig):
     ]
     assert mark_indexes and light_indexes
     assert mark_indexes[0] < light_indexes[0]
+
+
+def test_effective_ownership_compacts_unowned_records_without_losing_manual_contract():
+    """Recorder-safe projection keeps empty leaves tiny and manual ownership complete."""
+    entities = ("light.test_a", "light.test_b")
+    runtime = ShadowRuntime(managed_entities=frozenset(entities))
+
+    empty = effective_ownership(runtime.engine, entities)
+    assert empty["entities"]["light.test_a"] == {"owner": None, "kind": None, "desired": None, "protected": False}
+    assert empty["entities"]["light.test_b"] == {"owner": None, "kind": None, "desired": None, "protected": False}
+
+    runtime.observe_operation(operation(1, members=("light.test_a",), kind="off"))
+    projected = effective_ownership(runtime.engine, entities)
+    manual_off = projected["entities"]["light.test_a"]
+
+    assert manual_off["owner"] == "manual"
+    assert manual_off["kind"] == "manual_off"
+    assert manual_off["protected"] is True
+    assert manual_off["desired"]["on"] is False
+    assert projected["entities"]["light.test_b"] == {"owner": None, "kind": None, "desired": None, "protected": False}

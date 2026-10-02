@@ -1094,6 +1094,16 @@ def _parse_saved_at(value: Any) -> datetime | None:
     return parsed
 
 
+def _manual_ownership_survives_restart(saved_at: datetime, now: datetime) -> bool:
+    """Preserve Manual only across short restarts that do not cross 01:59."""
+    if saved_at > now:
+        return False
+    return (
+        now - saved_at < RESTART_MANUAL_MAX_DOWNTIME
+        and not _crossed_nightly_boundary(saved_at, now)
+    )
+
+
 def _manual_recovery_evidence(
     layers: tuple[OwnershipLayer, ...],
     saved_at: datetime | None,
@@ -1105,11 +1115,7 @@ def _manual_recovery_evidence(
     if saved_at is None or saved_at > now:
         return evidence
 
-    downtime = now - saved_at
-    temporally_valid = (
-        downtime < RESTART_MANUAL_MAX_DOWNTIME
-        and not _crossed_nightly_boundary(saved_at, now)
-    )
+    temporally_valid = _manual_ownership_survives_restart(saved_at, now)
     for layer in layers:
         entity_id = layer.metadata.get("persisted_entity_id")
         if not isinstance(entity_id, str):

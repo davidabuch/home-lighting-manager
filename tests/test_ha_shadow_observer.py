@@ -10,6 +10,7 @@ import pytest
 
 from custom_components.home_lighting_manager.ha_observer import (
     _crossed_nightly_boundary,
+    _manual_ownership_survives_restart,
     _next_generation,
 )
 
@@ -19,6 +20,35 @@ def test_generation_advances_from_persisted_payload():
     assert _next_generation({"generation": True}) == 1
     assert _next_generation({"generation": "7"}) == 1
     assert _next_generation(None) == 1
+
+
+def test_manual_restart_survival_policy():
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo("America/Los_Angeles")
+
+    # Normal reloads and short outages preserve explicit Manual ownership.
+    assert _manual_ownership_survives_restart(
+        datetime(2026, 10, 1, 19, 20, tzinfo=tz),
+        datetime(2026, 10, 1, 19, 22, tzinfo=tz),
+    )
+    assert _manual_ownership_survives_restart(
+        datetime(2026, 10, 1, 18, 0, tzinfo=tz),
+        datetime(2026, 10, 1, 18, 59, tzinfo=tz),
+    )
+
+    # One hour is the hard stale-outage cutoff.
+    assert not _manual_ownership_survives_restart(
+        datetime(2026, 10, 1, 18, 0, tzinfo=tz),
+        datetime(2026, 10, 1, 19, 0, tzinfo=tz),
+    )
+
+    # Crossing the nightly 01:59 ownership boundary always expires Manual,
+    # even when the outage is less than one hour.
+    assert not _manual_ownership_survives_restart(
+        datetime(2026, 10, 1, 1, 15, tzinfo=tz),
+        datetime(2026, 10, 1, 2, 5, tzinfo=tz),
+    )
 
 
 def test_nightly_boundary_detection():
@@ -186,7 +216,7 @@ async def test_startup_checkpoints_new_generation_immediately(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_restart_drops_persisted_manual_when_current_state_does_not_match(tmp_path):
+async def test_short_restart_restores_persisted_manual_even_if_startup_state_differs(tmp_path):
     from homeassistant.core import HomeAssistant
     from homeassistant.util import dt as dt_util
 
@@ -215,14 +245,17 @@ async def test_restart_drops_persisted_manual_when_current_state_does_not_match(
     await observer.async_start()
 
     assert observer.runtime.engine.generation == 8
-    assert observer.runtime.engine.resolve("light.shadow_test").layer is None
+    restored = observer.runtime.engine.resolve("light.shadow_test").layer
+    assert restored is not None
+    assert restored.owner == "manual"
+    assert restored.appearance == Appearance(on=True, brightness=123)
 
     await observer.async_shutdown()
     await hass.async_block_till_done()
 
 
 @pytest.mark.asyncio
-async def test_restart_restores_persisted_manual_only_when_current_state_corroborates_it(tmp_path):
+async def test_short_restart_restores_persisted_manual_when_current_state_matches(tmp_path):
     from homeassistant.core import HomeAssistant
     from homeassistant.util import dt as dt_util
 

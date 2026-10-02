@@ -23,7 +23,11 @@ from homeassistant.const import (
 )
 from homeassistant.core import Context, Event, HomeAssistant, State, callback
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.event import async_call_later, async_track_time_change
+from homeassistant.helpers.event import (
+    async_call_later,
+    async_track_time_change,
+    async_track_time_interval,
+)
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
@@ -65,6 +69,8 @@ EVIDENCE_LEDGER_SIZE = 12
 EXTERNAL_BURST_WINDOW_SECONDS = 2.0
 RENDERER_ATTRIBUTION_TTL_SECONDS = EXTERNAL_BURST_WINDOW_SECONDS
 NIGHTLY_BOUNDARY_SETTLE_SECONDS = 15.0
+RESTART_MANUAL_MAX_DOWNTIME = timedelta(hours=1)
+PERSISTENCE_HEARTBEAT_INTERVAL = timedelta(minutes=1)
 
 CONFIG_SCHEMA = vol.Schema(
     {
@@ -175,6 +181,13 @@ class HomeAssistantShadowObserver:
             )
         )
         self._unsubscribers.append(
+            async_track_time_interval(
+                self.hass,
+                self._async_persistence_heartbeat,
+                PERSISTENCE_HEARTBEAT_INTERVAL,
+            )
+        )
+        self._unsubscribers.append(
             self.hass.bus.async_listen_once(
                 EVENT_HOMEASSISTANT_STARTED, self._async_started_event
             )
@@ -214,9 +227,14 @@ class HomeAssistantShadowObserver:
         self._publish_diagnostics()
         self.hass.async_create_task(self.async_save())
 
-    async def async_save(self) -> None:
+    async def _async_persistence_heartbeat(self, _now: datetime) -> None:
+        """Refresh restart-age evidence without changing lighting ownership."""
+        await self.async_save(publish=False)
+
+    async def async_save(self, *, publish: bool = True) -> None:
         """Persist durable evidence; disk latency must not delay the authority view."""
-        self._publish_diagnostics()
+        if publish:
+            self._publish_diagnostics()
         payload = self.runtime.export_persistence()
         payload["generation"] = self.runtime.engine.generation
         payload["saved_at"] = dt_util.now().isoformat()
@@ -227,7 +245,8 @@ class HomeAssistantShadowObserver:
         payload["managed_surface_seen_members"] = sorted(self._surface_seen_members)
         await self.store.async_save(payload)
         self._storage_status = "saved"
-        self._publish_diagnostics()
+        if publish:
+            self._publish_diagnostics()
 
     async def _async_state_changed(self, event: Event) -> None:
         entity_id = event.data.get("entity_id")
@@ -1079,6 +1098,16 @@ def _parse_saved_at(value: Any) -> datetime | None:
     return parsed
 
 
+def _manual_ownership_survives_restart(saved_at: datetime, now: datetime) -> bool:
+    """Preserve Manual only across short restarts that do not cross 01:59."""
+    if saved_at > now:
+        return False
+    return (
+        now - saved_at < RESTART_MANUAL_MAX_DOWNTIME
+        and not _crossed_nightly_boundary(saved_at, now)
+    )
+
+
 def _manual_recovery_evidence(
     layers: tuple[OwnershipLayer, ...],
     saved_at: datetime | None,
@@ -1090,16 +1119,17 @@ def _manual_recovery_evidence(
     if saved_at is None or saved_at > now:
         return evidence
 
-    crossed_boundary = _crossed_nightly_boundary(saved_at, now)
+    temporally_valid = _manual_ownership_survives_restart(saved_at, now)
     for layer in layers:
         entity_id = layer.metadata.get("persisted_entity_id")
         if not isinstance(entity_id, str):
             continue
-        current = hass.states.get(entity_id)
         evidence[entity_id] = ManualRecoveryEvidence(
-            temporally_valid=not crossed_boundary,
+            temporally_valid=temporally_valid,
             desired_state_trustworthy=layer.appearance is not None,
-            ownership_evidence_coherent=_state_matches_persisted_layer(current, layer),
+            # For a short restart, persisted explicit homeowner ownership is
+            # authoritative. Startup/recovery telemetry must not veto it.
+            ownership_evidence_coherent=temporally_valid,
         )
     return evidence
 

@@ -39,3 +39,23 @@ Store envelope v1/domain payload v2 need no change: suppressed session evidence 
 already have representations; group-OFF arming and diagnostics are excluded from persistence.
 See [ADR 0002](adr/0002-layered-operations-off-engine.md) and the
 [acceptance matrix](ownership-acceptance-scenarios.md) for implementation/test traceability.
+
+
+## Manual ownership restart survival
+
+Persisted Manual and Manual-OFF ownership survives a Home Assistant restart only when both
+conditions are true:
+
+1. the persisted heartbeat is less than 60 minutes old; and
+2. the outage interval did not cross the nightly 01:59 ownership boundary.
+
+For a qualifying short restart, persisted explicit homeowner ownership is authoritative and startup
+or recovery telemetry must not veto it merely because the current Hue state differs while integrations
+are reconnecting.
+
+At exactly 60 minutes of downtime or longer, or whenever 01:59 was crossed, persisted Manual and
+Manual-OFF ownership expires. HLM then recomputes current automatic ownership from current-time truth.
+No historical command is replayed.
+
+HLM refreshes a persistence heartbeat while running so restart age represents recent controller
+liveness rather than time since the last ownership mutation.

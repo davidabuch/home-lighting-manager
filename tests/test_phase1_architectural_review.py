@@ -398,8 +398,9 @@ async def test_actual_pr22_storage_migration_uses_current_configuration_and_evid
     try:
         assert observer.runtime.engine.resolve("light.safe").layer.kind is LayerKind.MANUAL
         assert observer.runtime.engine.resolve("light.off").layer.kind is LayerKind.MANUAL_OFF
-        for entity in ("light.partial", "light.unavailable", "light.removed"):
-            assert observer.runtime.engine.resolve(entity).layer is None
+        assert observer.runtime.engine.resolve("light.partial").layer.kind is LayerKind.MANUAL
+        assert observer.runtime.engine.resolve("light.unavailable").layer.kind is LayerKind.MANUAL_OFF
+        assert observer.runtime.engine.resolve("light.removed").layer is None
         assert observer.runtime.diagnostics().homeowner_events == 0
         stored = await observer.store.async_load()
         assert stored["version"] == 2
@@ -408,9 +409,14 @@ async def test_actual_pr22_storage_migration_uses_current_configuration_and_evid
         await hass.async_block_till_done()
 
 
-@pytest.mark.parametrize("change", ["future", "expired", "missing", "bad-rgb"])
+@pytest.mark.parametrize(
+    ("change", "should_restore"),
+    [("future", False), ("expired", False), ("missing", True), ("bad-rgb", True)],
+)
 @pytest.mark.asyncio
-async def test_pr22_recovery_edge_cases_fail_closed(tmp_path, change):
+async def test_pr22_recovery_edge_cases_follow_restart_survival_contract(
+    tmp_path, change, should_restore
+):
     hass = HomeAssistant(str(tmp_path))
     hass.config.time_zone = "America/Los_Angeles"
     observer = HomeAssistantShadowObserver(hass, ["light.safe"])
@@ -429,7 +435,12 @@ async def test_pr22_recovery_edge_cases_fail_closed(tmp_path, change):
     now = datetime.fromisoformat("2026-09-17T12:30:00-07:00")
     with patch("custom_components.home_lighting_manager.ha_observer.dt_util.now", return_value=now):
         await observer.async_start()
-    assert observer.runtime.engine.resolve("light.safe").layer is None
+    restored = observer.runtime.engine.resolve("light.safe").layer
+    if should_restore:
+        assert restored is not None
+        assert restored.kind is LayerKind.MANUAL
+    else:
+        assert restored is None
     await observer.async_shutdown()
     await hass.async_block_till_done()
 

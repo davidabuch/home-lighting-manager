@@ -845,7 +845,7 @@ class HomeAssistantShadowObserver:
             "storage_status": self._storage_status,
             "command_authority": False,
             "evidence_ledger_size": EVIDENCE_LEDGER_SIZE,
-            "recent_evidence": list(self._evidence_ledger)[-1:],
+            "recent_evidence": list(self._evidence_ledger)[-2:],
             "external_burst_window_seconds": EXTERNAL_BURST_WINDOW_SECONDS,
             "external_burst": self._external_burst,
             "nightly_boundary_settle_seconds": NIGHTLY_BOUNDARY_SETTLE_SECONDS,

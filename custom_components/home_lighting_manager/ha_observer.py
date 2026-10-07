@@ -399,9 +399,15 @@ class HomeAssistantShadowObserver:
         if age < 0 or age > RENDERER_ATTRIBUTION_TTL_SECONDS:
             self._guarded_ha_consequence_entities.pop(entity_id, None)
             return None
-        if not self.hass.states.is_state(guard_id, STATE_ON):
-            self._guarded_ha_consequence_entities.pop(entity_id, None)
-            return None
+        # Registration already proved that this exact leaf/operation was issued
+        # while the surface guard was active. A later renderer may rearm the
+        # shared surface guard by pulsing it OFF -> ON while this command is
+        # still in flight. That shared-guard pulse must not erase the exact
+        # per-command causal marker; otherwise delayed/context-less Hue telemetry
+        # can be promoted as false homeowner Manual ownership.
+        #
+        # The marker remains narrowly bounded by entity + operation + the
+        # existing short TTL, so unrelated homeowner actions are not covered.
         if marked_operation != operation:
             return None
         return guard_id

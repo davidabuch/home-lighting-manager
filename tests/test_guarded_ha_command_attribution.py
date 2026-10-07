@@ -134,3 +134,60 @@ async def test_renderer_marker_expires_and_cannot_resurrect_across_guard_cycles(
     )
     assert observer._active_guard_for_ha_consequence(ENTITY, "off") is None
     assert ENTITY not in observer._guarded_ha_consequence_entities
+
+
+@pytest.mark.asyncio
+async def test_exact_renderer_marker_survives_concurrent_shared_guard_rearm(tmp_path, monkeypatch):
+    """A sibling render rearm must not erase an in-flight exact consequence marker."""
+    hass = HomeAssistant(str(tmp_path))
+    hass.states.async_set(GUARD, "on")
+    hass.states.async_set(ENTITY, "on", {"brightness": 76, "dynamics": "none"})
+    observer = make_observer(hass)
+
+    t0 = dt_util.now()
+    monkeypatch.setattr(
+        "custom_components.home_lighting_manager.ha_observer.dt_util.now",
+        lambda: t0,
+    )
+    assert observer.register_renderer_command_consequences(
+        [ENTITY], GUARD, "appearance"
+    ) == 1
+
+    # Reproduce the production Spa race: another renderer invokes the shared
+    # rearm script while the first Hue command is still in flight.
+    hass.states.async_set(GUARD, "off")
+    hass.states.async_set(GUARD, "on")
+    monkeypatch.setattr(
+        "custom_components.home_lighting_manager.ha_observer.dt_util.now",
+        lambda: t0 + timedelta(milliseconds=250),
+    )
+
+    state = State(
+        ENTITY,
+        "on",
+        {"brightness": 125, "xy_color": [0.385, 0.47], "dynamics": "none"},
+    )
+    observation = observation_from_state_change(
+        ENTITY,
+        State(ENTITY, "on", {"brightness": 76, "dynamics": "none"}),
+        state,
+        Context(),
+        manual_precedence=SURFACE_MANUAL_PRECEDENCE,
+    )
+    assert observation is not None
+
+    guarded = observer._apply_ha_guard_attribution(ENTITY, observation)
+    assert guarded.evidence.kind is IntentEvidenceKind.HLM_COMMAND_CONSEQUENCE
+    assert guarded.evidence.renderer_consequence is True
+
+    decision = observer.runtime.observe(guarded)
+    assert not decision.mutated
+    assert observer.runtime.engine.resolve(ENTITY).layer is None
+
+    # The protection is still short-lived; it does not survive beyond the
+    # existing two-second renderer attribution window.
+    monkeypatch.setattr(
+        "custom_components.home_lighting_manager.ha_observer.dt_util.now",
+        lambda: t0 + timedelta(seconds=2.1),
+    )
+    assert observer._active_guard_for_ha_consequence(ENTITY, "appearance") is None

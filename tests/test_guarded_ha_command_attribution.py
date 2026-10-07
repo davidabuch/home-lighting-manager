@@ -130,7 +130,57 @@ async def test_renderer_marker_expires_and_cannot_resurrect_across_guard_cycles(
     hass.states.async_set(GUARD, "on")
     monkeypatch.setattr(
         "custom_components.home_lighting_manager.ha_observer.dt_util.now",
-        lambda: t0 + timedelta(seconds=2.1),
+        lambda: t0 + timedelta(seconds=2.6),
+    )
+    assert observer._active_guard_for_ha_consequence(ENTITY, "off") == GUARD
+
+    monkeypatch.setattr(
+        "custom_components.home_lighting_manager.ha_observer.dt_util.now",
+        lambda: t0 + timedelta(seconds=8.1),
     )
     assert observer._active_guard_for_ha_consequence(ENTITY, "off") is None
     assert ENTITY not in observer._guarded_ha_consequence_entities
+
+
+@pytest.mark.asyncio
+async def test_delayed_spa_transition_receipt_stays_renderer_owned(tmp_path, monkeypatch):
+    """Hue telemetry after a 2.5 s Spa transition must not become Manual."""
+    hass = HomeAssistant(str(tmp_path))
+    hass.states.async_set(GUARD, "on")
+    hass.states.async_set(ENTITY, "on")
+    observer = make_observer(hass)
+
+    t0 = dt_util.now()
+    monkeypatch.setattr(
+        "custom_components.home_lighting_manager.ha_observer.dt_util.now",
+        lambda: t0,
+    )
+    assert observer.register_renderer_command_consequences(
+        [ENTITY], GUARD, "appearance"
+    ) == 1
+
+    delayed_state = State(
+        ENTITY,
+        "on",
+        {"brightness": 125, "xy_color": (0.3, 0.4)},
+    )
+    observation = observation_from_state_change(
+        ENTITY,
+        State(ENTITY, "on", {"brightness": 255, "xy_color": (0.2, 0.3)}),
+        delayed_state,
+        Context(),
+        manual_precedence=SURFACE_MANUAL_PRECEDENCE,
+    )
+    assert observation is not None
+
+    monkeypatch.setattr(
+        "custom_components.home_lighting_manager.ha_observer.dt_util.now",
+        lambda: t0 + timedelta(seconds=2.6),
+    )
+    guarded = observer._apply_ha_guard_attribution(ENTITY, observation)
+    assert guarded.evidence.renderer_consequence is True
+    assert guarded.evidence.kind is IntentEvidenceKind.HLM_COMMAND_CONSEQUENCE
+
+    decision = observer.runtime.observe(guarded)
+    assert not decision.mutated
+    assert observer.runtime.engine.resolve(ENTITY).layer is None

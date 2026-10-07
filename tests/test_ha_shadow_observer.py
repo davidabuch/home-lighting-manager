@@ -88,9 +88,9 @@ def test_observer_source_contains_no_command_service_calls():
 async def test_observer_lifecycle_and_high_confidence_manual_tracking(tmp_path):
     from homeassistant.core import Context, HomeAssistant
 
-    from custom_components.home_lighting_manager.ha_observer import DIAGNOSTIC_ENTITY_ID
-    from custom_components.home_lighting_manager.promotion_observer import (
-        PromotingHomeAssistantShadowObserver,
+    from custom_components.home_lighting_manager.ha_observer import (
+        DIAGNOSTIC_ENTITY_ID,
+        HomeAssistantShadowObserver,
     )
 
     hass = HomeAssistant(str(tmp_path))
@@ -850,9 +850,9 @@ async def test_shadow_health_attributes_stay_below_recorder_limit(tmp_path):
     """A production-sized observer must remain recordable by Home Assistant."""
     from homeassistant.core import HomeAssistant
 
-    from custom_components.home_lighting_manager.ha_observer import (
-        DIAGNOSTIC_ENTITY_ID,
-        HomeAssistantShadowObserver,
+    from custom_components.home_lighting_manager.ha_observer import DIAGNOSTIC_ENTITY_ID
+    from custom_components.home_lighting_manager.promotion_observer import (
+        PromotingHomeAssistantShadowObserver,
     )
 
     hass = HomeAssistant(str(tmp_path))

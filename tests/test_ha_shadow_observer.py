@@ -850,15 +850,15 @@ async def test_shadow_health_attributes_stay_below_recorder_limit(tmp_path):
     """A production-sized observer must remain recordable by Home Assistant."""
     from homeassistant.core import HomeAssistant
 
-    from custom_components.home_lighting_manager.ha_observer import (
-        DIAGNOSTIC_ENTITY_ID,
-        HomeAssistantShadowObserver,
+    from custom_components.home_lighting_manager.ha_observer import DIAGNOSTIC_ENTITY_ID
+    from custom_components.home_lighting_manager.promotion_observer import (
+        PromotingHomeAssistantShadowObserver,
     )
 
     hass = HomeAssistant(str(tmp_path))
     entities = [f"light.synthetic_{index:03d}" for index in range(95)]
     precedence = {entity_id: 250 for entity_id in entities[:26]}
-    observer = HomeAssistantShadowObserver(hass, entities, precedence)
+    observer = PromotingHomeAssistantShadowObserver(hass, entities, precedence)
 
     # Fill the in-memory evidence ledger with realistic verbose records. The
     # published sensor must expose only its bounded recorder-safe tail.
@@ -889,10 +889,67 @@ async def test_shadow_health_attributes_stay_below_recorder_limit(tmp_path):
             }
         )
 
+    # Reproduce the production failure that escaped the original recorder test:
+    # each armed-group attempt can contain full member lists and pending-member
+    # maps large enough that a tail of four alone exceeds Recorder's 16 KiB cap.
+    members = [f"light.backyard_member_{index:02d}" for index in range(12)]
+    for index in range(4):
+        observer._armed_off_attempts.append(
+            {
+                "timestamp": f"2026-10-07T10:08:0{index}-07:00",
+                "aggregate_entity": "light.backyard",
+                "operation": "off",
+                "group_id": "light.backyard",
+                "sequence": 370 + index,
+                "generation": 253,
+                "runtime_generation": 253,
+                "runtime_revision": 1,
+                "stage": "armed",
+                "result": "rejected_group_not_armed",
+                "armed_group_ids": [],
+                "armed_group_count": 0,
+                "armed_members": [],
+                "armed_member_count": 0,
+                "aggregate_members": list(members),
+                "aggregate_member_count": len(members),
+                "burst_leaf_members": [],
+                "burst_aggregate_members": [
+                    "light.backyard",
+                    "light.backyard_backyard",
+                    "light.holiday_backyard",
+                    "light.holiday_lighting",
+                ],
+                "burst_started_at": "2026-10-07T10:08:00-07:00",
+                "burst_updated_at": "2026-10-07T10:08:01-07:00",
+                "burst_topology": "aggregate_only",
+                "snapshot_members": list(members),
+                "current_cache_members": list(members),
+                "pending_leaf_ids": [],
+                "pending_leaf_count": 0,
+                "pending_members": dict.fromkeys(members),
+                "pending_single_keys": [],
+                "guard_state": "not_configured",
+                "sync_state": "not_configured",
+                "canonical_aggregate_state": "off",
+                "candidate_qualified": False,
+                "candidate_basis": "insufficient_topology_evidence",
+                "candidate_entity": None,
+                "candidate_group": None,
+                "attribution_source": "unattributed_external",
+                "has_user_id": False,
+                "has_parent_id": False,
+                "latest_removal_serial": None,
+            }
+        )
+
     observer._publish_diagnostics()
     state = hass.states.get(DIAGNOSTIC_ENTITY_ID)
     assert state is not None
     encoded = json.dumps(dict(state.attributes), separators=(",", ":"), default=str)
     assert len(encoded.encode()) < 16_384
     assert len(state.attributes["recent_evidence"]) == 2
+    assert len(state.attributes["armed_group_off_attempts"]) == 2
+    assert state.attributes["armed_group_off_attempt_count"] == 4
+    assert "pending_members" not in state.attributes["armed_group_off_attempts"][-1]
+    assert "aggregate_members" not in state.attributes["armed_group_off_attempts"][-1]
     assert len(state.attributes["effective_ownership"]["entities"]) == 26

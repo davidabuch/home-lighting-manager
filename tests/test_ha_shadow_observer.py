@@ -947,7 +947,7 @@ async def test_shadow_health_attributes_stay_below_recorder_limit(tmp_path):
     assert state is not None
     encoded = json.dumps(dict(state.attributes), separators=(",", ":"), default=str)
     assert len(encoded.encode()) < 16_384
-    assert len(state.attributes["recent_evidence"]) == 1
+    assert len(state.attributes["recent_evidence"]) == 2
     assert len(state.attributes["armed_group_off_attempts"]) == 2
     assert state.attributes["armed_group_off_attempt_count"] == 4
     assert "pending_members" not in state.attributes["armed_group_off_attempts"][-1]

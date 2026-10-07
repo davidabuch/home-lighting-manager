@@ -90,6 +90,36 @@ CONFIG_SCHEMA = vol.Schema(
 )
 
 
+
+def _compact_armed_group_off_attempt(record: dict[str, Any]) -> dict[str, Any]:
+    """Return the forensic fields needed for HA diagnostics without huge member maps."""
+    fields = (
+        "timestamp",
+        "aggregate_entity",
+        "operation",
+        "group_id",
+        "sequence",
+        "generation",
+        "runtime_generation",
+        "runtime_revision",
+        "stage",
+        "result",
+        "armed_group_count",
+        "aggregate_member_count",
+        "pending_leaf_count",
+        "burst_topology",
+        "candidate_qualified",
+        "candidate_basis",
+        "candidate_entity",
+        "candidate_group",
+        "attribution_source",
+        "has_user_id",
+        "has_parent_id",
+        "latest_removal_serial",
+    )
+    return {field: record.get(field) for field in fields if field in record}
+
+
 class HomeAssistantShadowObserver:
     """Bridge Home Assistant observations into the non-commanding shadow runtime."""
 
@@ -815,7 +845,7 @@ class HomeAssistantShadowObserver:
             "storage_status": self._storage_status,
             "command_authority": False,
             "evidence_ledger_size": EVIDENCE_LEDGER_SIZE,
-            "recent_evidence": list(self._evidence_ledger)[-2:],
+            "recent_evidence": list(self._evidence_ledger)[-1:],
             "external_burst_window_seconds": EXTERNAL_BURST_WINDOW_SECONDS,
             "external_burst": self._external_burst,
             "nightly_boundary_settle_seconds": NIGHTLY_BOUNDARY_SETTLE_SECONDS,
@@ -855,11 +885,17 @@ class HomeAssistantShadowObserver:
             "last_mutation_reason": ownership.get("last_mutation_reason"),
             "latest_homeowner_operation": ownership.get("latest_homeowner_operation"),
             "latest_operation_rejection": ownership.get("latest_operation_rejection"),
-            "recent_operations": list(ownership.get("recent_operations", []))[-4:],
-            "armed_group_off_attempts": list(
+            "recent_operations": list(ownership.get("recent_operations", []))[-2:],
+            "armed_group_off_attempt_count": len(
                 off_diagnostics.get("armed_group_off_attempts", [])
-            )[-4:],
-            "off_leaf_evidence": list(off_diagnostics.get("off_leaf_evidence", []))[-8:],
+            ),
+            "armed_group_off_attempts": [
+                _compact_armed_group_off_attempt(item)
+                for item in list(
+                    off_diagnostics.get("armed_group_off_attempts", [])
+                )[-2:]
+            ],
+            "off_leaf_evidence": list(off_diagnostics.get("off_leaf_evidence", []))[-4:],
         }
         if self._last_decision is not None:
             attrs.update(

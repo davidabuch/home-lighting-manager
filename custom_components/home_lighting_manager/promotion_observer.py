@@ -1393,6 +1393,22 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
             observed_aggregate_entities=aggregate_entities,
             topology_members=burst_topology,
         )
+        if group_id is None:
+            # Hue can expose multiple aggregate aliases with identical direct
+            # membership (for example light.backyard and light.holiday_backyard).
+            # Generic duplicate groups remain ambiguous, but a receipt from the
+            # one commissioned canonical surface is enough to identify the scope
+            # when its exact managed membership is the observed leaf set.
+            commissioned_groups = {group for group, _guard in _SURFACE_GUARDS}
+            canonical_members = self._managed_group_members(
+                burst_topology.get(current_entity_id, ())
+            )
+            if (
+                current_entity_id in commissioned_groups
+                and current_entity_id in set(aggregate_entities)
+                and canonical_members == leaf_entities
+            ):
+                group_id = current_entity_id
 
         # An already-armed group owns the next OFF interaction for its exact member
         # set. Nested Hue aggregates from the same physical command must not create a

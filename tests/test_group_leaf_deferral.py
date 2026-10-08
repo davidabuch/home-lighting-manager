@@ -268,3 +268,46 @@ async def test_different_newer_leaf_operation_still_cancels_deferred_promotion(t
     finally:
         await observer.async_shutdown()
         await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_commissioned_surface_off_promotes_despite_duplicate_hue_alias(tmp_path):
+    """A canonical surface receipt disambiguates duplicate Hue zone aliases."""
+    left, right = "light.backyard_left", "light.backyard_right"
+    canonical, alias = "light.holiday_backyard", "light.backyard"
+    hass, observer = await observer_for(tmp_path, [left, right, canonical, alias])
+    try:
+        hass.states.async_set(
+            "input_boolean.home_lighting_ha_guard_backyard", "off"
+        )
+        hass.states.async_set("binary_sensor.hue_bridge_backyard", "off")
+        await seed_group(hass, canonical, (left, right), state="on")
+        await seed_group(hass, alias, (left, right), state="on")
+
+        # First whole-zone OFF: all leaves fan out, both Hue aggregate aliases
+        # report OFF, and the canonical commissioned surface must own promotion.
+        hass.states.async_set(left, "off")
+        await hass.async_block_till_done()
+        hass.states.async_set(right, "off")
+        await hass.async_block_till_done()
+        hass.states.async_set(alias, "off", {"entity_id": [left, right]})
+        await hass.async_block_till_done()
+        hass.states.async_set(canonical, "off", {"entity_id": [left, right]})
+        await hass.async_block_till_done()
+
+        latest = observer.runtime.operations.latest_homeowner
+        assert latest is not None
+        assert latest["group_id"] == canonical
+        assert latest["reason"] == "released_to_hlm"
+        assert tuple(observer.runtime.engine.group_off_sequences()[canonical]) == (
+            left,
+            right,
+        )
+
+        # Generic duplicate aliases are still not guessed when neither is a
+        # commissioned canonical surface.
+        assert observer.runtime.engine.resolve(left).layer is None
+        assert observer.runtime.engine.resolve(right).layer is None
+    finally:
+        await observer.async_shutdown()
+        await hass.async_block_till_done()

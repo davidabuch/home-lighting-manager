@@ -375,6 +375,10 @@ class Adapter:
         if entity in TRANSIENTS or entity in EVALUATORS:
             if old and new and old.attributes.get("current") == new.attributes.get("current"):
                 return
+        elif entity == BACKYARD_BRIGHT_WHITE_TOGGLE:
+            if old and new and old.state == new.state:
+                return
+            immediate = True
         elif entity in CONTROL:
             if entity == HLM_DIAGNOSTIC:
                 if (

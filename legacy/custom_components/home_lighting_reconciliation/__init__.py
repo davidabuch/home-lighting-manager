@@ -22,6 +22,14 @@ from .runtime import Reconciler
 _LOGGER = logging.getLogger(__name__)
 
 BACKYARD_EVE_49ERS_ENTITY = "light.festavia_permanent_1"
+BACKYARD_BRIGHT_WHITE_TOGGLE = "input_boolean.backyard_bright_white"
+BACKYARD_BRIGHT_WHITE_ENTITIES = frozenset(
+    {
+        "light.backyard_backyard_flood_light",
+        "light.backyard_outdoor_kitchen_light",
+        "light.festavia_permanent_1",
+    }
+)
 
 CONFIG_SCHEMA = vol.Schema({vol.Optional(DOMAIN): vol.Schema({})}, extra=vol.ALLOW_EXTRA)
 
@@ -166,10 +174,15 @@ class Adapter:
             and spa is not None
             and spa.state == "off"
         )
-        if active and "backyard" in result:
+        if "backyard" in result:
             excluded = set(result["backyard"].get("excluded_entities", ()))
-            excluded.add(BACKYARD_EVE_49ERS_ENTITY)
-            result["backyard"]["excluded_entities"] = sorted(excluded)
+            if active:
+                excluded.add(BACKYARD_EVE_49ERS_ENTITY)
+            bright_white = self.hass.states.get(BACKYARD_BRIGHT_WHITE_TOGGLE)
+            if bright_white is not None and bright_white.state == "on":
+                excluded.update(BACKYARD_BRIGHT_WHITE_ENTITIES)
+            if excluded:
+                result["backyard"]["excluded_entities"] = sorted(excluded)
         return result
 
     def with_scene_monitor_corroboration(self, owners, metadata):
@@ -362,6 +375,10 @@ class Adapter:
         if entity in TRANSIENTS or entity in EVALUATORS:
             if old and new and old.attributes.get("current") == new.attributes.get("current"):
                 return
+        elif entity == BACKYARD_BRIGHT_WHITE_TOGGLE:
+            if old and new and old.state == new.state:
+                return
+            immediate = True
         elif entity in CONTROL:
             if entity == HLM_DIAGNOSTIC:
                 if (

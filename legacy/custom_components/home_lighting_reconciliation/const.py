@@ -30,6 +30,7 @@ CONTROL = {
     "input_boolean.home_lighting_holiday_active",
     "input_text.home_lighting_holiday_key",
     "input_boolean.spa_gauge_active",
+    "input_boolean.backyard_bright_white",
     "binary_sensor.hue_bridge_living_room",
     "binary_sensor.hue_bridge_backyard",
     "binary_sensor.liquor_cabinet_door_r",

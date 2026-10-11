@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from custom_components.home_lighting_reconciliation.__init__ import (
+from custom_components.home_lighting_reconciliation import (
     BACKYARD_BRIGHT_WHITE_ENTITIES,
     Adapter,
 )

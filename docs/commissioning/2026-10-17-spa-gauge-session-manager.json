@@ -1,0 +1,259 @@
+{
+  "id": "1784335425206",
+  "alias": "Spa Gauge - Session Manager",
+  "description": "Starts the spa temperature gauge after Heat has remained on for 30 seconds. While active, the Spa Gauge owns the Backyard lighting surface and the Home Lighting Manager will not issue Backyard light commands. When the spa turns off, gauge ownership is released and the Backyard Lighting Manager reevaluates the current daily window. On Home Assistant startup, current thermostat truth is rechecked so stale restored Spa Gauge ownership cannot survive a restart. Spa shutdown cleanup is tracked by HLM.",
+  "triggers": [
+    {
+      "trigger": "state",
+      "entity_id": "climate.hot_tub_thermostat",
+      "to": "heat",
+      "for": "00:00:30",
+      "id": "spa_started"
+    },
+    {
+      "trigger": "state",
+      "entity_id": "climate.hot_tub_thermostat",
+      "to": "off",
+      "id": "spa_stopped"
+    },
+    {
+      "trigger": "homeassistant",
+      "event": "start",
+      "id": "ha_started"
+    }
+  ],
+  "conditions": [],
+  "actions": [
+    {
+      "choose": [
+        {
+          "conditions": [
+            {
+              "condition": "trigger",
+              "id": "ha_started"
+            }
+          ],
+          "sequence": [
+            {
+              "delay": {
+                "seconds": 30
+              }
+            },
+            {
+              "if": [
+                {
+                  "condition": "state",
+                  "entity_id": "climate.hot_tub_thermostat",
+                  "state": "heat"
+                }
+              ],
+              "then": [
+                {
+                  "if": [
+                    {
+                      "condition": "state",
+                      "entity_id": "input_boolean.spa_gauge_active",
+                      "state": "off"
+                    }
+                  ],
+                  "then": [
+                    {
+                      "action": "scene.create",
+                      "data": {
+                        "scene_id": "spa_gauge_saved_state",
+                        "snapshot_entities": [
+                          "light.backyard_spa_strip_lights"
+                        ]
+                      }
+                    },
+                    {
+                      "action": "input_boolean.turn_off",
+                      "target": {
+                        "entity_id": "input_boolean.spa_gauge_blinked"
+                      }
+                    },
+                    {
+                      "action": "input_boolean.turn_on",
+                      "target": {
+                        "entity_id": "input_boolean.spa_gauge_active"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "else": [
+                {
+                  "action": "input_boolean.turn_off",
+                  "target": {
+                    "entity_id": "input_boolean.spa_gauge_active"
+                  }
+                },
+                {
+                  "action": "automation.turn_off",
+                  "target": {
+                    "entity_id": "automation.spa_gauge_temperature_color"
+                  },
+                  "data": {
+                    "stop_actions": true
+                  }
+                },
+                {
+                  "delay": {
+                    "seconds": 1
+                  }
+                },
+                {
+                  "action": "script.home_lighting_evaluate_backyard"
+                },
+                {
+                  "action": "input_boolean.turn_off",
+                  "target": {
+                    "entity_id": "input_boolean.spa_gauge_blinked"
+                  }
+                },
+                {
+                  "action": "automation.turn_on",
+                  "target": {
+                    "entity_id": "automation.spa_gauge_temperature_color"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "conditions": [
+            {
+              "condition": "trigger",
+              "id": "spa_started"
+            }
+          ],
+          "sequence": [
+            {
+              "action": "scene.create",
+              "data": {
+                "scene_id": "spa_gauge_saved_state",
+                "snapshot_entities": [
+                  "light.backyard_spa_strip_lights"
+                ]
+              }
+            },
+            {
+              "action": "input_boolean.turn_off",
+              "target": {
+                "entity_id": "input_boolean.spa_gauge_blinked"
+              }
+            },
+            {
+              "action": "input_boolean.turn_on",
+              "target": {
+                "entity_id": "input_boolean.spa_gauge_active"
+              }
+            }
+          ]
+        },
+        {
+          "conditions": [
+            {
+              "condition": "trigger",
+              "id": "spa_stopped"
+            }
+          ],
+          "sequence": [
+            {
+              "action": "input_boolean.turn_off",
+              "target": {
+                "entity_id": "input_boolean.spa_gauge_active"
+              }
+            },
+            {
+              "action": "automation.turn_off",
+              "target": {
+                "entity_id": "automation.spa_gauge_temperature_color"
+              },
+              "data": {
+                "stop_actions": true
+              }
+            },
+            {
+              "delay": {
+                "seconds": 3
+              }
+            },
+            {
+              "action": "script.home_lighting_evaluate_backyard"
+            },
+            {
+              "if": [
+                {
+                  "condition": "state",
+                  "entity_id": "climate.hot_tub_thermostat",
+                  "state": "off"
+                },
+                {
+                  "condition": "state",
+                  "entity_id": "input_boolean.home_lighting_manual_backyard",
+                  "state": "off"
+                },
+                {
+                  "condition": "state",
+                  "entity_id": "binary_sensor.hue_bridge_backyard",
+                  "state": "off"
+                },
+                {
+                  "condition": "state",
+                  "entity_id": "input_boolean.backyard_bright_white",
+                  "state": "off"
+                },
+                {
+                  "condition": "state",
+                  "entity_id": "sensor.home_lighting_reconciliation_health",
+                  "attribute": "owner_backyard",
+                  "state": "off"
+                },
+                {
+                  "condition": "template",
+                  "value_template": "{{ 'light.backyard_spa_strip_lights' not in (state_attr('sensor.home_lighting_manager_shadow_health', 'reconciliation_protected_entities') or []) }}"
+                }
+              ],
+              "then": [
+                {
+                  "action": "home_lighting_manager.mark_command_consequence",
+                  "data": {
+                    "guard_entity": "input_boolean.home_lighting_ha_guard_backyard",
+                    "operation": "off",
+                    "entity_ids": [
+                      "light.backyard_spa_strip_lights"
+                    ]
+                  }
+                },
+                {
+                  "action": "light.turn_off",
+                  "target": {
+                    "entity_id": "light.backyard_spa_strip_lights"
+                  },
+                  "data": {
+                    "transition": 0
+                  }
+                }
+              ]
+            },
+            {
+              "action": "input_boolean.turn_off",
+              "target": {
+                "entity_id": "input_boolean.spa_gauge_blinked"
+              }
+            },
+            {
+              "action": "automation.turn_on",
+              "target": {
+                "entity_id": "automation.spa_gauge_temperature_color"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "mode": "restart"
+}

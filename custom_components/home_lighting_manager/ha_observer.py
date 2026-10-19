@@ -342,6 +342,10 @@ class HomeAssistantShadowObserver:
         A surface guard alone cannot override an unrelated homeowner operation.
         This collector never changes ownership or closes boundary quarantine.
         """
+        # A direct homeowner command remains authoritative even if its operation
+        # happens to coincide with a recent renderer command.
+        if observation.evidence.kind is IntentEvidenceKind.EXPLICIT_HOMEOWNER_COMMAND:
+            return observation
         marker = self._active_guard_for_ha_consequence(entity_id, observation.operation)
         if marker is None:
             return observation

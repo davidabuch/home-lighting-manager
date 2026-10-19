@@ -184,3 +184,32 @@ async def test_delayed_spa_transition_receipt_stays_renderer_owned(tmp_path, mon
     decision = observer.runtime.observe(guarded)
     assert not decision.mutated
     assert observer.runtime.engine.resolve(ENTITY).layer is None
+
+@pytest.mark.asyncio
+async def test_spa_blink_out_of_order_off_then_on_receipts_remain_renderer_owned(tmp_path, monkeypatch):
+    """An OFF receipt arriving after the next ON marker is still renderer-owned."""
+    hass = HomeAssistant(str(tmp_path))
+    hass.states.async_set(GUARD, "on")
+    observer = make_observer(hass)
+    t0 = dt_util.now()
+    monkeypatch.setattr(
+        "custom_components.home_lighting_manager.ha_observer.dt_util.now",
+        lambda: t0,
+    )
+    assert observer.register_renderer_command_consequences([ENTITY], GUARD, "off") == 1
+    monkeypatch.setattr(
+        "custom_components.home_lighting_manager.ha_observer.dt_util.now",
+        lambda: t0 + timedelta(milliseconds=250),
+    )
+    assert observer.register_renderer_command_consequences([ENTITY], GUARD, "appearance") == 1
+    assert observer._active_guard_for_ha_consequence(ENTITY, "off") == GUARD
+    assert observer._active_guard_for_ha_consequence(ENTITY, "appearance") == GUARD
+    delayed_off = observation_from_state_change(
+        ENTITY, State(ENTITY, "on"), State(ENTITY, "off"), Context(),
+        manual_precedence=SURFACE_MANUAL_PRECEDENCE,
+    )
+    assert delayed_off is not None
+    assert observer._apply_ha_guard_attribution(
+        ENTITY, delayed_off
+    ).evidence.kind is IntentEvidenceKind.HLM_COMMAND_CONSEQUENCE
+    assert observer.runtime.engine.resolve(ENTITY).layer is None

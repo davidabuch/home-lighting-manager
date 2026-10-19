@@ -158,7 +158,7 @@ class HomeAssistantShadowObserver:
         self._topology_members: dict[str, tuple[str, ...]] = {}
         self._nightly_boundary_settle_until: datetime | None = None
         self._post_boundary_off_entities: set[str] = set()
-        self._guarded_ha_consequence_entities: dict[str, tuple[str, str, datetime]] = {}
+        self._guarded_ha_consequence_entities: dict[str, deque[tuple[str, str, datetime]]] = {}
 
     async def async_start(self) -> None:
         """Load trusted evidence and begin observation without command authority."""
@@ -408,11 +408,13 @@ class HomeAssistantShadowObserver:
         accepted = 0
         for entity_id in entity_ids:
             if isinstance(entity_id, str) and entity_id in members:
-                self._guarded_ha_consequence_entities[entity_id] = (
-                    guard_entity,
-                    operation,
-                    dt_util.now(),
+                # Hue can report a prior OFF after the next ON pulse was sent.
+                # Keep bounded, operation-specific receipts rather than replacing
+                # the previous marker with the newest command.
+                receipts = self._guarded_ha_consequence_entities.setdefault(
+                    entity_id, deque(maxlen=16)
                 )
+                receipts.append((guard_entity, operation, dt_util.now()))
                 accepted += 1
         return accepted
 
@@ -421,20 +423,30 @@ class HomeAssistantShadowObserver:
         self, entity_id: str, operation: str
     ) -> str | None:
         """Return active guard only when telemetry matches the renderer command."""
-        marker = self._guarded_ha_consequence_entities.get(entity_id)
-        if marker is None:
+        receipts = self._guarded_ha_consequence_entities.get(entity_id)
+        if not receipts:
             return None
-        guard_id, marked_operation, created_at = marker
-        age = (dt_util.now() - created_at).total_seconds()
-        if age < 0 or age > RENDERER_ATTRIBUTION_TTL_SECONDS:
+        now = dt_util.now()
+        valid = deque(
+            (
+                (guard_id, marked_operation, created_at)
+                for guard_id, marked_operation, created_at in receipts
+                if 0 <= (now - created_at).total_seconds()
+                <= RENDERER_ATTRIBUTION_TTL_SECONDS
+                and self.hass.states.is_state(guard_id, STATE_ON)
+            ),
+            maxlen=16,
+        )
+        if not valid:
             self._guarded_ha_consequence_entities.pop(entity_id, None)
             return None
-        if not self.hass.states.is_state(guard_id, STATE_ON):
-            self._guarded_ha_consequence_entities.pop(entity_id, None)
-            return None
-        if marked_operation != operation:
-            return None
-        return guard_id
+        self._guarded_ha_consequence_entities[entity_id] = valid
+        # Match the operation rather than only the most recently sent command:
+        # async Hue telemetry from a blink can arrive out of order.
+        for guard_id, marked_operation, _created_at in reversed(valid):
+            if marked_operation == operation:
+                return guard_id
+        return None
 
     @callback
     def _record_external_topology(

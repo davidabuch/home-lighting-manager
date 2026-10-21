@@ -269,6 +269,7 @@ async def render(adapter, surface, service, entities, parameters, context, expec
             projection_current(hass, initial)
             and same_resolved_owners(current_owners, owners)
             and adapter.active_scripts() == scripts
+            and hass.states.is_state(guard_entity, "on")
         )
 
     def eligible():
@@ -303,6 +304,16 @@ async def render(adapter, surface, service, entities, parameters, context, expec
                     for e in actions
                 ):
                     await mark_scene_targets(hass, actions, targets, guard_entity)
+                    # Marker registration is awaited metadata, not an authority fence.
+                    if not await valid():
+                        adapter.render_note(surface, "stale_plan", [scene])
+                        return
+                    if not all(
+                        (s := hass.states.get(e)) and s.state not in ("unknown", "unavailable")
+                        for e in actions
+                    ):
+                        adapter.render_note(surface, "unavailable_scene_member", [scene])
+                        return
                     await hass.services.async_call(
                         "scene",
                         "turn_on",
@@ -339,6 +350,11 @@ async def render(adapter, surface, service, entities, parameters, context, expec
             await mark_command_consequence(
                 hass, [entity], guard_entity, operation
             )
+            if not await valid():
+                adapter.render_note(surface, "stale_plan", [entity])
+                return
+            if entity not in eligible():
+                continue
             domain, action = service.split(".")
             await hass.services.async_call(
                 domain, action, {"entity_id": entity, **parameters}, blocking=True, context=context

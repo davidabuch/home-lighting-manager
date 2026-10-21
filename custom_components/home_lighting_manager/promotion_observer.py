@@ -489,6 +489,21 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
         if not isinstance(candidate, dict):
             self._trace_armed_off(burst, {}, observation, members, "routing", "missing_candidate")
             return
+        if candidate.get("qualified") is not True:
+            # A qualified prefix is not authority after this interaction grows
+            # into ambiguous multi-leaf evidence. Retain the leaf receipts for
+            # exact-group resolution, but revoke their provisional single timers.
+            # Independent bursts may still have valid timers for other leaves.
+            invalidated = tuple(
+                entity for entity in self._external_correlator.summary().leaf_entities
+                if any(key[1] == entity for key in self._pending_single_promotions)
+            )
+            self._cancel_pending_single_for_entities(invalidated)
+            for entity in invalidated:
+                self._off_leaf_evidence.append({
+                    "timestamp": observed_at.isoformat(), "entity_id": entity,
+                    "result": "deferred_single_scope_no_longer_qualified",
+                })
         # Canonical surface OFF semantics outrank a provisional single-leaf
         # candidate. This matters for one-managed-leaf surfaces such as Front Eve.
         # Partial OFFs still fall through because the group gates require the full
@@ -828,7 +843,8 @@ class PromotingHomeAssistantShadowObserver(HomeAssistantShadowObserver):
 
         @callback
         def _finalize(_now: datetime) -> None:
-            self._pending_single_promotions.pop(promotion_key, None)
+            if self._pending_single_promotions.pop(promotion_key, None) is None:
+                return  # A cancelled/dequeued callback cannot regain authority.
             current = self._pending_external_leaves.get(entity_id)
             if current is None:
                 return

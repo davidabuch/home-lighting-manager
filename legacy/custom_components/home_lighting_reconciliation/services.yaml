@@ -41,3 +41,19 @@ render:
       required: false
       selector:
         text:
+
+cabinet:
+  name: Resolve cabinet functional interval
+  description: >-
+    Internal cabinet-scoped execution using current doors, Sync and canonical
+    ownership. A submitted request is not a verified release.
+  fields:
+    reason:
+      selector:
+        select:
+          options:
+            - door_state
+            - ownership_changed
+            - sync_changed
+            - startup
+            - recovery

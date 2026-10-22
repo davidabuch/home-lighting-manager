@@ -22,6 +22,7 @@ GROUPS = dict(
     )
 )
 LIQUOR = "light.living_room_liquor_cabinet_light"
+LIQUOR_WHITE = {"brightness": 255, "color_temp_kelvin": 4000, "effect": "off", "transition": 0}
 
 
 @dataclass(frozen=True)
@@ -114,6 +115,8 @@ def verify(owners, states, scripts, members, scene_info, suppressed=None):
         owner = owners[surface]["owner"]
         manual_entities = set(owners[surface].get("manual_entities", []))
         manual_entities.update(owners[surface].get("excluded_entities", []))
+        functional_pending = set(owners[surface].get("functional_pending_entities", ()))
+        manual_entities.update(functional_pending)
         if surface in suppressed or owner in ("sync", "manual", "spa"):
             out.skipped[surface] = suppressed.get(surface, owner)
             # Manual has a functional liquor exception; Sync and transients do not.
@@ -122,7 +125,7 @@ def verify(owners, states, scripts, members, scene_info, suppressed=None):
                     out,
                     surface,
                     states,
-                    *commands_in(scripts["home_lighting_liquor_white"]["sequence"])[0],
+                    "light.turn_on", LIQUOR, LIQUOR_WHITE,
                 )
             continue
         if surface not in members or not members[surface]:
@@ -132,7 +135,7 @@ def verify(owners, states, scripts, members, scene_info, suppressed=None):
         if pending_intent:
             out.skipped[surface] = "provisional intent: " + ",".join(sorted(pending_intent)[:32])
         for entity in owners[surface].get("manual_off_entities", ()):
-            if entity not in pending_intent and entity in members[surface] and not (entity == LIQUOR and door):
+            if entity not in pending_intent | functional_pending and entity in members[surface] and not (entity == LIQUOR and door):
                 _static(out, surface, states, "light.turn_off", entity, {"transition": 0})
         if owner == "off":
             for entity in members[surface]:
@@ -189,7 +192,7 @@ def verify(owners, states, scripts, members, scene_info, suppressed=None):
                 out,
                 surface,
                 states,
-                *commands_in(scripts["home_lighting_liquor_white"]["sequence"])[0],
+                "light.turn_on", LIQUOR, LIQUOR_WHITE,
             )
     return out
 

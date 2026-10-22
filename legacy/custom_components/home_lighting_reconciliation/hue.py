@@ -201,6 +201,8 @@ class HueEvidence:
                     "speed": scene.get("speed"),
                     "latest": latest.get("id") == entry.unique_id,
                     "hue_scene_id": entry.unique_id,
+                    "auto_dynamic": scene.get("auto_dynamic"),
+                    "active": scene.get("status", {}).get("active"),
                 }
             else:
                 info[scene_id] = {"error": "unresolved Hue scene actions"}

@@ -32,6 +32,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .attribution_correlation import ExternalBurstCorrelator, ExternalTopologyEvent
+from .command_receipts import CommandReceipts
 from .engine import MAX_ENTITIES, NIGHTLY_BOUNDARY
 from .intent_policy import (
     IntentAttributionSource,
@@ -159,6 +160,7 @@ class HomeAssistantShadowObserver:
         self._nightly_boundary_settle_until: datetime | None = None
         self._post_boundary_off_entities: set[str] = set()
         self._guarded_ha_consequence_entities: dict[str, deque[tuple[str, str, datetime]]] = {}
+        self.command_receipts = CommandReceipts()
 
     async def async_start(self) -> None:
         """Load trusted evidence and begin observation without command authority."""
@@ -335,15 +337,21 @@ class HomeAssistantShadowObserver:
 
     @callback
     def _apply_ha_guard_attribution(
-        self, entity_id: str, observation: ShadowObservation
+        self, entity_id: str, observation: ShadowObservation, state: State | None = None
     ) -> ShadowObservation:
         """Collect exact renderer consequence evidence, even when Hue strips context.
 
         A surface guard alone cannot override an unrelated homeowner operation.
         This collector never changes ownership or closes boundary quarantine.
         """
-        marker = self._active_guard_for_ha_consequence(entity_id, observation.operation)
-        if marker is None:
+        tracked = False
+        if state is not None and state.state in (STATE_ON, STATE_OFF):
+            tracked = self.command_receipts.matches(
+                entity_id, {**dict(state.attributes), "on": state.state == STATE_ON},
+                state.context, self.runtime.engine.generation, dt_util.now(),
+            )
+        marker = tracked or self._active_guard_for_ha_consequence(entity_id, observation.operation)
+        if not marker:
             return observation
         return replace(observation, evidence=replace(
             observation.evidence, renderer_consequence=True,
@@ -356,7 +364,7 @@ class HomeAssistantShadowObserver:
 
     def _normalize_observation(self, observation: ShadowObservation, new_state: State):
         """Collect causal facts; ownership policy lives in classify_intent."""
-        observation = self._apply_ha_guard_attribution(observation.entity_id, observation)
+        observation = self._apply_ha_guard_attribution(observation.entity_id, observation, new_state)
         dynamics = new_state.attributes.get("dynamics")
         structural_states = [
             self.hass.states.get(sensor)

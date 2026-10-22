@@ -53,6 +53,13 @@ def automation(rig, filename, name, fast=False):
 @pytest.mark.parametrize("first", ["right", "left"])
 @pytest.mark.parametrize("mode", ["xy", "color_temp", "off"])
 async def test_two_doors_preserve_first_snapshot(rig, first, mode):
+    from test_cabinet_recovery import prepare
+
+    from custom_components.home_lighting_manager.model import Appearance
+    prepare(rig, 'manual_off' if mode == 'off' else 'manual',
+            Appearance(False) if mode == 'off' else Appearance(
+                True, brightness=91, color_mode=mode,
+                xy_color=(0.21, 0.32), color_temp_kelvin=3210))
     automation(rig, "liquor_cabinet_display_lighting.yaml", "liquor_cabinet_display_lighting")
     bulb = "light.living_room_liquor_cabinet_light"
     rig.set("input_boolean.home_lighting_manual_main_area", "on")
@@ -80,7 +87,7 @@ async def test_two_doors_preserve_first_snapshot(rig, first, mode):
     assert rig.get(bulb).attributes["brightness"] == 255
     assert rig.get(bulb).attributes["color_temp_kelvin"] == 4000
     await event(second, True)
-    assert rig.get("input_number.home_lighting_liquor_snapshot_brightness").state == "91"
+    assert rig.renderer.cabinet.interval.snapshot['desired']['brightness'] == (None if mode == 'off' else 91)
     await event(first, False)
     assert rig.get(bulb).attributes["brightness"] == 255
     await event(second, False)
@@ -93,7 +100,11 @@ async def test_two_doors_preserve_first_snapshot(rig, first, mode):
 
 
 @pytest.mark.asyncio
-async def test_second_open_during_capture_cannot_cancel_first(rig):
+async def test_second_open_during_capture_cannot_cancel_first(rig, monkeypatch):
+    from test_cabinet_recovery import prepare
+
+    from custom_components.home_lighting_manager.model import Appearance
+    prepare(rig, 'manual', Appearance(True, brightness=71, xy_color=(0.2, 0.3), color_mode='xy'))
     automation(rig, "liquor_cabinet_display_lighting.yaml", "liquor_cabinet_display_lighting")
     rig.set("input_boolean.home_lighting_manual_main_area", "on")
     rig.set(
@@ -105,18 +116,24 @@ async def test_second_open_during_capture_cannot_cancel_first(rig):
 
     async def hold(call):
         if (
-            call.data.get("entity_id") == "input_number.home_lighting_liquor_snapshot_brightness"
-            and not entered.is_set()
+            call.domain == "home_lighting_manager" and call.service == "track_command_consequence"
+            and call.data.get("phase") == "prepare" and not entered.is_set()
         ):
             entered.set()
             await release.wait()
 
-    rig.before_service = hold
+    from types import SimpleNamespace
+    original_track = rig.renderer.cabinet.track
+    async def track(*args):
+        await original_track(*args)
+        await hold(SimpleNamespace(domain='home_lighting_manager',
+            service='track_command_consequence', data={'phase': args[1]}))
+    monkeypatch.setattr(rig.renderer.cabinet, 'track', track)
     rig.set("binary_sensor.liquor_cabinet_door_r", "on")
     first = asyncio.create_task(
         rig.run("liquor_cabinet_display_lighting", {"trigger": {"id": "right_opened"}})
     )
-    await entered.wait()
+    await asyncio.wait_for(entered.wait(), 2)
     rig.set("binary_sensor.liquor_cabinet_l_door", "on")
     second = asyncio.create_task(
         rig.run("liquor_cabinet_display_lighting", {"trigger": {"id": "left_opened"}})
@@ -124,11 +141,15 @@ async def test_second_open_during_capture_cannot_cancel_first(rig):
     await asyncio.sleep(0)
     release.set()
     await asyncio.gather(first, second)
-    assert rig.get("input_number.home_lighting_liquor_snapshot_brightness").state == "71"
+    assert rig.renderer.cabinet.interval.snapshot['desired']['brightness'] == 71
 
 
 @pytest.mark.asyncio
 async def test_failed_liquor_restore_retains_snapshot(rig):
+    from test_cabinet_recovery import prepare
+
+    from custom_components.home_lighting_manager.model import Appearance
+    prepare(rig, 'manual', Appearance(True, brightness=71, xy_color=(0.2, 0.3), color_mode='xy'))
     automation(rig, "liquor_cabinet_display_lighting.yaml", "liquor_cabinet_display_lighting")
     rig.set("input_boolean.home_lighting_manual_main_area", "on")
     rig.set(
@@ -142,7 +163,7 @@ async def test_failed_liquor_restore_retains_snapshot(rig):
     rig.fail_light = True
     with pytest.raises(RuntimeError):
         await rig.run("liquor_cabinet_display_lighting", {"trigger": {"id": "right_closed"}})
-    assert rig.get("input_boolean.home_lighting_liquor_snapshot_valid").state == "on"
+    assert rig.renderer.cabinet.interval.snapshot['desired']['brightness'] == 71
 
 
 @pytest.mark.asyncio
@@ -297,7 +318,12 @@ async def test_startup_legacy_main_area_aggregate_does_not_suppress_automatic_ow
 
 
 @pytest.mark.asyncio
-async def test_liquor_known_manual_scene_restores_native_scene(rig):
+async def test_liquor_known_manual_scene_retains_identity_without_unsafe_group_recall(rig):
+    from test_cabinet_recovery import prepare
+
+    from custom_components.home_lighting_manager.model import Appearance
+    prepare(rig, 'manual', Appearance(True,
+        scene_id='5228223d-532f-4bef-b266-0ceceb780819', scene_evidence='native recall'))
     automation(rig, "liquor_cabinet_display_lighting.yaml", "liquor_cabinet_display_lighting")
     rig.set("input_boolean.home_lighting_manual_main_area", "on")
     rig.set(
@@ -312,7 +338,10 @@ async def test_liquor_known_manual_scene_restores_native_scene(rig):
     await rig.run("liquor_cabinet_display_lighting", {"trigger": {"id": "right_opened"}})
     rig.set("binary_sensor.liquor_cabinet_door_r", "off")
     await rig.run("liquor_cabinet_display_lighting", {"trigger": {"id": "right_closed"}})
-    assert rig.lights()[-1] == ("scene.turn_on", {"entity_id": "scene.holiday_main_area_49ers"})
+    assert not any(service == 'scene.turn_on' for service, _ in rig.calls)
+    assert rig.renderer.cabinet.last['reason'] == 'native_manual_scene_rejoin_requires_capability'
+    assert rig.renderer.cabinet.interval.snapshot['desired']['scene_id'] == (
+        '5228223d-532f-4bef-b266-0ceceb780819')
     assert not any(service == "scene.create" for service, _ in rig.calls)
 
 

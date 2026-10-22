@@ -240,6 +240,10 @@ async def render(adapter, surface, service, entities, parameters, context, expec
         return
     current = project_owners(hass, owners, members)[surface]
     protected = set(current["manual_entities"]) | set(current["pending_intent_entities"])
+    # Functional release is not Manual intent. Its executor alone may commit
+    # that interval; ordinary automatic rendering must not race its completion.
+    if surface == "main_area" and adapter.cabinet.interval is not None:
+        protected.add(LIQUOR)
     if surface == "main_area" and owners["liquor_cabinet"]["owner"] == "door":
         protected.add(LIQUOR)
     # Raw Hue extras are never added to HLM ownership. They may participate in a
@@ -265,11 +269,21 @@ async def render(adapter, surface, service, entities, parameters, context, expec
 
     async def valid():
         current_owners = await adapter.owners()
+        targets_cabinet = LIQUOR in entities or (
+            service == "scene.turn_on"
+            and any(LIQUOR in metadata.get(scene, {}).get("actions", {}) for scene in scenes)
+        ) or any(
+            entity in GROUP_ALIASES[surface]
+            or ((s := hass.states.get(entity)) is not None
+                and set(s.attributes.get("entity_id", ())) == group)
+            for entity in entities
+        )
         return (
             projection_current(hass, initial)
             and same_resolved_owners(current_owners, owners)
             and adapter.active_scripts() == scripts
             and hass.states.is_state(guard_entity, "on")
+            and not (targets_cabinet and LIQUOR in allowed and adapter.cabinet.interval is not None)
         )
 
     def eligible():

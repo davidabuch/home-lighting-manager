@@ -295,7 +295,7 @@ script:
           'valentines_day': 'scene.holiday_main_area_valentines_day',
           'st_patricks_day': 'scene.holiday_main_area_st_patricks_day',
           'july_4': 'scene.holiday_main_area_4th_of_july',
-          'halloween': 'scene.holiday_main_area_trick_or_treat',
+          'halloween': 'scene.holiday_main_area_glowing_grins',
           'thanksgiving': 'scene.holiday_main_area_pumpkin_spice',
           'christmas': 'scene.holiday_main_area_jolly',
           'hanukkah': 'scene.holiday_main_area_hanukkah'
@@ -306,7 +306,7 @@ script:
           'valentines_day': 'scene.holiday_front_eve_zone_valentines_day',
           'st_patricks_day': 'scene.holiday_front_eve_zone_st_patricks_day',
           'july_4': 'scene.front_eve_zone_4th_of_july',
-          'halloween': 'scene.holiday_front_eve_zone_trick_or_treat',
+          'halloween': 'scene.holiday_front_eve_zone_glowing_grins',
           'thanksgiving': 'scene.holiday_front_eve_zone_pumpkin_spice',
           'christmas': 'scene.front_eve_zone_jolly',
           'hanukkah': 'scene.front_eve_zone_hanukkah'
@@ -317,7 +317,7 @@ script:
           'valentines_day': 'scene.holiday_path_valentines_day',
           'st_patricks_day': 'scene.holiday_path_st_patricks_day',
           'july_4': 'scene.holiday_path_4th_of_july',
-          'halloween': 'scene.holiday_path_trick_or_treat',
+          'halloween': 'scene.holiday_path_glowing_grins',
           'thanksgiving': 'scene.holiday_path_pumpkin_spice',
           'christmas': 'scene.holiday_path_jolly',
           'hanukkah': 'scene.holiday_path_hanukkah'
@@ -328,7 +328,7 @@ script:
           'valentines_day': 'scene.holiday_backyard_valentines_day',
           'st_patricks_day': 'scene.holiday_backyard_st_patricks_day',
           'july_4': 'scene.holiday_backyard_4th_of_july',
-          'halloween': 'scene.holiday_backyard_trick_or_treat',
+          'halloween': 'scene.holiday_backyard_glowing_grins',
           'thanksgiving': 'scene.holiday_backyard_pumpkin_spice',
           'christmas': 'scene.holiday_backyard_jolly',
           'hanukkah': 'scene.holiday_backyard_hanukkah'

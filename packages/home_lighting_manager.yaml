@@ -378,28 +378,13 @@ script:
 
   home_lighting_liquor_white:
     alias: Home Lighting - Liquor White Overlay
-    mode: restart
+    description: Cabinet transaction resolves current doors, Sync and per-light ownership.
+    mode: parallel
+    max: 20
     sequence:
-    - if:
-      - condition: state
-        entity_id: binary_sensor.hue_bridge_living_room
-        state: 'off'
-      - condition: or
-        conditions:
-        - condition: state
-          entity_id: binary_sensor.liquor_cabinet_door_r
-          state: 'on'
-        - condition: state
-          entity_id: binary_sensor.liquor_cabinet_l_door
-          state: 'on'
-      then:
-      - action: light.turn_on
-        target:
-          entity_id: light.living_room_liquor_cabinet_light
-        data:
-          brightness: 255
-          color_temp_kelvin: 4000
-          transition: 0
+    - action: home_lighting_reconciliation.cabinet
+      data:
+        reason: door_state
 
   # ============================================================
   # FRONT EVE BASELINE

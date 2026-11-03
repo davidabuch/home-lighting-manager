@@ -1,0 +1,146 @@
+{
+  "source_baseline": "2e59932cb74d6b67a3d9dbe9f16ee8fc1f8ae861",
+  "reported_rollback_backup": "/config/hlm-deployment-backups/rollback-110-20261021-182550",
+  "reported_rollback_verified": false,
+  "components": [
+    {
+      "component": "custom_components/home_lighting_manager/promotion_observer.py",
+      "installed_sha256": null,
+      "loaded_revision": null,
+      "confidence": "source hashes verified; installed and loaded identity unverified",
+      "main_sha256": "7a5ebb0759c516efab37be27f71d2745eaa3b848f381d66e34f8492817457eb1",
+      "pre110_sha256": "293659a89e7c942d588e4b71d5e57592166e8edca5a5325f2714260d6a1f8f65"
+    },
+    {
+      "component": "legacy/custom_components/home_lighting_reconciliation/rendering.py",
+      "installed_sha256": null,
+      "loaded_revision": null,
+      "confidence": "source hashes verified; installed and loaded identity unverified",
+      "main_sha256": "cc00b1671332a4ceb6172ae35d99e9656a587853ba44fb0a74a771eb4f31229e",
+      "pre110_sha256": "1b384235e4850a3161a5f5dab7a7174256294b1121fc56634133fe92530444d4"
+    },
+    {
+      "component": "custom_components/home_lighting_manager/ha_observer.py",
+      "installed_sha256": null,
+      "loaded_revision": null,
+      "confidence": "source hashes verified; installed and loaded identity unverified",
+      "main_sha256": "a1c5d0adadca83df77fbf4fe1ea5d915eacc5eed76e8a921a91daa9f33104ac6",
+      "pre110_sha256": "a1c5d0adadca83df77fbf4fe1ea5d915eacc5eed76e8a921a91daa9f33104ac6"
+    },
+    {
+      "component": "legacy/custom_components/home_lighting_reconciliation/__init__.py",
+      "installed_sha256": null,
+      "loaded_revision": null,
+      "confidence": "source hashes verified; installed and loaded identity unverified",
+      "main_sha256": "f2b134bae34d03ebf3bb0f9966ed62ede5fbcd45085bf23af4a896229c3eda6e",
+      "pre110_sha256": "f2b134bae34d03ebf3bb0f9966ed62ede5fbcd45085bf23af4a896229c3eda6e"
+    },
+    {
+      "component": "packages/home_lighting_manager.yaml",
+      "installed_sha256": null,
+      "loaded_revision": null,
+      "confidence": "source hashes verified; installed and loaded identity unverified",
+      "main_sha256": "a16d11db266c6afce085d383523fb8507a44b2251bbc35a9770b1e9a0f52a3a2",
+      "pre110_sha256": "a16d11db266c6afce085d383523fb8507a44b2251bbc35a9770b1e9a0f52a3a2"
+    },
+    {
+      "component": "automations/liquor_cabinet_display_lighting.yaml",
+      "installed_sha256": null,
+      "loaded_revision": null,
+      "confidence": "source hashes verified; installed and loaded identity unverified",
+      "main_sha256": "73c069aa85cf9941c0244507e5b9acec7849a3b720363c73b7384eb6c70fa86d",
+      "pre110_sha256": "73c069aa85cf9941c0244507e5b9acec7849a3b720363c73b7384eb6c70fa86d"
+    }
+  ],
+  "live_config_hashes": {
+    "cabinet": "eede36cafeb09f19",
+    "spa_session_manager": "04c0bce6a4124640",
+    "spa_temperature_color": "8c6d6a7163853fa7"
+  },
+  "candidate_files": [
+    {
+      "source_path": "automations/liquor_cabinet_display_lighting.yaml",
+      "installed_path": "automations/liquor_cabinet_display_lighting.yaml",
+      "candidate_sha256": "7d4b5bcdb536a53f76b4847167c8ca9d67b861a1b5aad5d8d359631373748c10",
+      "installed_sha256": null,
+      "loaded_revision": null
+    },
+    {
+      "source_path": "custom_components/home_lighting_manager/__init__.py",
+      "installed_path": "custom_components/home_lighting_manager/__init__.py",
+      "candidate_sha256": "ef2d08b7e5a2088dfe07670690dc0cb87f63cdda7f6fe096ef421ffdf7586242",
+      "installed_sha256": null,
+      "loaded_revision": null
+    },
+    {
+      "source_path": "custom_components/home_lighting_manager/ha_observer.py",
+      "installed_path": "custom_components/home_lighting_manager/ha_observer.py",
+      "candidate_sha256": "83c8ac6ce1f8d5238f4fd0e3b1810fd49ae9c1f52ba38ed8869f1aab72da66bb",
+      "installed_sha256": null,
+      "loaded_revision": null
+    },
+    {
+      "source_path": "custom_components/home_lighting_manager/services.yaml",
+      "installed_path": "custom_components/home_lighting_manager/services.yaml",
+      "candidate_sha256": "b02910812f98a9e48ed3b0accccb4b6664bd27bdfea00b95a73ed92e7278489f",
+      "installed_sha256": null,
+      "loaded_revision": null
+    },
+    {
+      "source_path": "legacy/custom_components/home_lighting_reconciliation/__init__.py",
+      "installed_path": "custom_components/home_lighting_reconciliation/__init__.py",
+      "candidate_sha256": "1d0be21cbc203a30cef00fd2bc585ebeb3e3008fae49c93dc197c4f0d017e1ce",
+      "installed_sha256": null,
+      "loaded_revision": null
+    },
+    {
+      "source_path": "legacy/custom_components/home_lighting_reconciliation/engine.py",
+      "installed_path": "custom_components/home_lighting_reconciliation/engine.py",
+      "candidate_sha256": "dd5180fef05a666ffe1697f8ce322bb0cef8f7d233cc00dde96938523b8c453c",
+      "installed_sha256": null,
+      "loaded_revision": null
+    },
+    {
+      "source_path": "legacy/custom_components/home_lighting_reconciliation/hue.py",
+      "installed_path": "custom_components/home_lighting_reconciliation/hue.py",
+      "candidate_sha256": "b231f91e2697dd17599c6f16a5dcf153ffeded684ad1f23beb8b1f5b46d49508",
+      "installed_sha256": null,
+      "loaded_revision": null
+    },
+    {
+      "source_path": "legacy/custom_components/home_lighting_reconciliation/rendering.py",
+      "installed_path": "custom_components/home_lighting_reconciliation/rendering.py",
+      "candidate_sha256": "526db2b57a3ac89e00dd4a76164d3224e2ffa2ec80913cb7dd6458494831da3a",
+      "installed_sha256": null,
+      "loaded_revision": null
+    },
+    {
+      "source_path": "legacy/custom_components/home_lighting_reconciliation/services.yaml",
+      "installed_path": "custom_components/home_lighting_reconciliation/services.yaml",
+      "candidate_sha256": "e882895c119968cec230388fbbef5630c47a6417c7aa94a48d8b7307c040c8d5",
+      "installed_sha256": null,
+      "loaded_revision": null
+    },
+    {
+      "source_path": "packages/home_lighting_manager.yaml",
+      "installed_path": "packages/home_lighting_manager.yaml",
+      "candidate_sha256": "7940191ce6f661a4a774844c016b72256f91d0981c24b88c07523feb63043fba",
+      "installed_sha256": null,
+      "loaded_revision": null
+    },
+    {
+      "source_path": "custom_components/home_lighting_manager/command_receipts.py",
+      "installed_path": "custom_components/home_lighting_manager/command_receipts.py",
+      "candidate_sha256": "41dfb77e3e3b9423cd2805945947e7ebc36dc96e7964199a93f66276dfea804e",
+      "installed_sha256": null,
+      "loaded_revision": null
+    },
+    {
+      "source_path": "legacy/custom_components/home_lighting_reconciliation/cabinet.py",
+      "installed_path": "custom_components/home_lighting_reconciliation/cabinet.py",
+      "candidate_sha256": "35a8f0f87551e9ffad77865191f03f323a7448935bf73619bd3ed340d14fad51",
+      "installed_sha256": null,
+      "loaded_revision": null
+    }
+  ]
+}

@@ -67,11 +67,20 @@
       #   window OFF -> Backyard OFF
       - action: script.home_lighting_evaluate_backyard
 
-      # Hue can acknowledge the room scene while leaving the Spa Strip
-      # on its last static Spa Gauge appearance. Only retry when the
-      # room should be Daily, Spa is still off, and the strip has not
-      # rejoined Hue dynamics. Never force a scene across Manual/Sync/
-      # Holiday ownership. The evaluator rechecks authority at execution.
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.spa_gauge_blinked
+
+      # Prepare Temperature Color promptly; do not leave it disabled
+      # while waiting for delayed verification.
+      - action: automation.turn_on
+        target:
+          entity_id: automation.spa_gauge_temperature_color
+
+      # A static Spa Strip after a native dynamic scene restoration is
+      # evidence that Hue may not have rejoined the room dynamics.
+      # Each retry independently checks Spa OFF and current ownership.
+      # No retry is allowed to force through a homeowner/Sync/Holiday owner.
       - repeat:
           for_each:
           - 5
@@ -79,28 +88,23 @@
           sequence:
           - delay:
               seconds: "{{ repeat.item }}"
-          - condition: state
-            entity_id: climate.poolos_native_intellicenter_hot_tub_thermostat
-            state: 'off'
-          - condition: state
-            entity_id: input_boolean.spa_gauge_active
-            state: 'off'
-          - action: script.home_lighting_resolve_owners
-            response_variable: spa_release_owner
-          - condition: template
-            value_template: "{{ spa_release_owner.backyard.owner == 'daily' }}"
-          - condition: template
-            value_template: >-
-              {{ is_state('light.backyard_spa_strip_lights', 'on')
-                 and state_attr('light.backyard_spa_strip_lights', 'dynamics') == 'none' }}
-          - action: script.home_lighting_evaluate_backyard
-
-      - action: input_boolean.turn_off
-        target:
-          entity_id: input_boolean.spa_gauge_blinked
-
-      # Prepare Temperature Color for the next spa session.
-      - action: automation.turn_on
-        target:
-          entity_id: automation.spa_gauge_temperature_color
+          - if:
+              - condition: state
+                entity_id: climate.poolos_native_intellicenter_hot_tub_thermostat
+                state: 'off'
+              - condition: state
+                entity_id: input_boolean.spa_gauge_active
+                state: 'off'
+              - condition: template
+                value_template: >-
+                  {{ is_state('light.backyard_spa_strip_lights', 'on')
+                     and state_attr('light.backyard_spa_strip_lights', 'dynamics') == 'none' }}
+            then:
+              - action: script.home_lighting_resolve_owners
+                response_variable: spa_release_owner
+              - if:
+                  - condition: template
+                    value_template: "{{ spa_release_owner.backyard.owner == 'daily' }}"
+                then:
+                  - action: script.home_lighting_evaluate_backyard
   mode: restart

@@ -8,12 +8,12 @@
     the Backyard Lighting Manager reevaluates the current daily window.
   triggers:
   - trigger: state
-    entity_id: climate.poolos_native_intellicenter_hot_tub_thermostat
+    entity_id: climate.hot_tub_thermostat
     to: heat
     for: 00:00:30
     id: spa_started
   - trigger: state
-    entity_id: climate.poolos_native_intellicenter_hot_tub_thermostat
+    entity_id: climate.hot_tub_thermostat
     to: 'off'
     id: spa_stopped
   conditions: []
@@ -90,7 +90,7 @@
               seconds: "{{ repeat.item }}"
           - if:
               - condition: state
-                entity_id: climate.poolos_native_intellicenter_hot_tub_thermostat
+                entity_id: climate.hot_tub_thermostat
                 state: 'off'
               - condition: state
                 entity_id: input_boolean.spa_gauge_active

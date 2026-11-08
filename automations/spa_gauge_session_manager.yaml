@@ -104,7 +104,10 @@
                 response_variable: spa_release_owner
               - if:
                   - condition: template
-                    value_template: "{{ spa_release_owner.backyard.owner == 'daily' }}"
+                    value_template: >-
+                      {{ spa_release_owner.backyard.owner == 'daily'
+                         and 'light.backyard_spa_strip_lights' not in
+                             spa_release_owner.main_area.manual_entities | default([]) }}
                 then:
                   - action: script.home_lighting_evaluate_backyard
   mode: restart

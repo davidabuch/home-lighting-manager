@@ -8,12 +8,12 @@
     the Backyard Lighting Manager reevaluates the current daily window.
   triggers:
   - trigger: state
-    entity_id: climate.poolos_native_intellicenter_hot_tub_thermostat
+    entity_id: climate.hot_tub_thermostat
     to: heat
     for: 00:00:30
     id: spa_started
   - trigger: state
-    entity_id: climate.poolos_native_intellicenter_hot_tub_thermostat
+    entity_id: climate.hot_tub_thermostat
     to: 'off'
     id: spa_stopped
   conditions: []
@@ -71,8 +71,43 @@
         target:
           entity_id: input_boolean.spa_gauge_blinked
 
-      # Prepare Temperature Color for the next spa session.
+      # Prepare Temperature Color promptly; do not leave it disabled
+      # while waiting for delayed verification.
       - action: automation.turn_on
         target:
           entity_id: automation.spa_gauge_temperature_color
+
+      # A static Spa Strip after a native dynamic scene restoration is
+      # evidence that Hue may not have rejoined the room dynamics.
+      # Each retry independently checks Spa OFF and current ownership.
+      # No retry is allowed to force through a homeowner/Sync/Holiday owner.
+      - repeat:
+          for_each:
+          - 5
+          - 10
+          sequence:
+          - delay:
+              seconds: "{{ repeat.item }}"
+          - if:
+              - condition: state
+                entity_id: climate.hot_tub_thermostat
+                state: 'off'
+              - condition: state
+                entity_id: input_boolean.spa_gauge_active
+                state: 'off'
+              - condition: template
+                value_template: >-
+                  {{ is_state('light.backyard_spa_strip_lights', 'on')
+                     and state_attr('light.backyard_spa_strip_lights', 'dynamics') == 'none' }}
+            then:
+              - action: script.home_lighting_resolve_owners
+                response_variable: spa_release_owner
+              - if:
+                  - condition: template
+                    value_template: >-
+                      {{ spa_release_owner.backyard.owner == 'daily'
+                         and 'light.backyard_spa_strip_lights' not in
+                             spa_release_owner.main_area.manual_entities | default([]) }}
+                then:
+                  - action: script.home_lighting_evaluate_backyard
   mode: restart

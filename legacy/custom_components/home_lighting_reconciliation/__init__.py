@@ -8,11 +8,12 @@ from homeassistant.const import (
     EVENT_HOMEASSISTANT_STOP,
     EVENT_STATE_CHANGED,
 )
-from homeassistant.core import Context, callback
+from homeassistant.core import Context, SupportsResponse, callback
 from homeassistant.helpers import discovery
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.util import dt as dt_util
 
+from .cabinet import Cabinet
 from .const import CONTROL, DOMAIN, EVALUATORS, HLM_DIAGNOSTIC, SIGNAL, SURFACES, TRANSIENTS
 from .engine import GROUPS, LIQUOR, commands_in, verify
 from .hue import HueEvidence
@@ -43,6 +44,7 @@ class Adapter:
         self.known_members = {*GROUPS.values(), LIQUOR}
         self.last_logged = None
         self.last_evidence = ({}, {})
+        self.cabinet = Cabinet(self)
 
     def render_note(self, surface, reason, entities):
         self.runner.diag["last_render"] = {
@@ -54,6 +56,15 @@ class Adapter:
         async_dispatcher_send(self.hass, SIGNAL)
 
     def register_renderer(self):
+        async def cabinet(call):
+            return await self.cabinet.update(call.data.get("reason", "door_state"), call.context)
+
+        self.hass.services.async_register(
+            DOMAIN, "cabinet", cabinet, supports_response=SupportsResponse.OPTIONAL,
+            schema=vol.Schema({vol.Optional("reason", default="door_state"): vol.In(
+                ("door_state", "ownership_changed", "sync_changed", "startup", "recovery")
+            )}),
+        )
         async def execute(call):
             try:
                 await render(
@@ -155,7 +166,10 @@ class Adapter:
         return result
 
     def with_hlm_protection(self, owners, members):
-        return project_owners(self.hass, owners, members)
+        result = project_owners(self.hass, owners, members)
+        if self.cabinet.interval is not None:
+            result["main_area"]["functional_pending_entities"] = [LIQUOR]
+        return result
 
     def with_legacy_overlay_exclusions(self, owners):
         """Exclude leaves intentionally owned by legacy overlay families."""
@@ -253,28 +267,26 @@ class Adapter:
             s.entity_id: {"state": s.state, "attributes": dict(s.attributes)}
             for s in self.hass.states.async_all("light")
         }
+        functional_pending = (
+            self.cabinet.interval is not None
+            and self.cabinet.inputs()[:2] == ("off", "off")
+        )
         check = verify(current, states, scripts, members, metadata, blocked)
-        snapshot = self.hass.states.get("input_boolean.home_lighting_liquor_snapshot_valid")
-        if (
-            "main_area" not in blocked
-            and current["main_area"]["owner"] == "manual"
-            and current["liquor_cabinet"]["owner"] != "door"
-            and snapshot is not None
-            and snapshot.state == "on"
-        ):
-            check.issues.append(
-                {
-                    "surface": "main_area",
-                    "entity": LIQUOR,
-                    "error": "Manual snapshot still pending release; retained without guessing",
-                }
-            )
+        if functional_pending:
+            check.issues.append({"surface": "main_area", "entity": LIQUOR,
+                                 "error": "Functional release pending: "
+                                 + self.cabinet.last["status"]})
         for surface, reason in blocked.items():
             if reason.startswith("missing"):
                 check.issues.append({"surface": surface, "error": reason})
         return check, current
 
     async def repair(self, command, owners, valid):
+        if command.entity == LIQUOR and owners["liquor_cabinet"]["owner"] == "door":
+            if not valid():
+                return False
+            result = await self.cabinet.update()
+            return result["status"] == "white_submitted"
         # Guard rearming is itself awaited; it is NOT a licence to use a stale plan.
         context = Context()
         scripts = self.active_scripts()
@@ -367,6 +379,13 @@ class Adapter:
 
     @callback
     def changed(self, event):
+        if event.data.get("entity_id") in (
+            "binary_sensor.liquor_cabinet_l_door", "binary_sensor.liquor_cabinet_door_r",
+            "binary_sensor.hue_bridge_living_room",
+        ):
+            self.cabinet.invalidate_inputs()
+        if event.data.get("entity_id") == LIQUOR:
+            self.cabinet.observe()
         if not self.started:
             return
         entity = event.data["entity_id"]

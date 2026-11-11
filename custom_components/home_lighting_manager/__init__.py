@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.util import dt as dt_util
 
 from .ha_observer import (
     CONF_MANUAL_PRECEDENCE,
@@ -63,4 +64,34 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     hass.services.async_register(
         DOMAIN, "mark_command_consequence", async_mark_command_consequence
     )
+    register_command_tracking(hass, observer)
     return True
+
+
+def register_command_tracking(hass, observer):
+    """Register metadata-only transactions; shared with offline adapter tests."""
+    async def async_track_command_consequence(call: ServiceCall) -> None:
+        identity = call.data.get("receipt_id")
+        if not isinstance(identity, str) or not 0 < len(identity) <= 128:
+            raise ValueError("Invalid consequence identity")
+        if call.data.get("phase") == "cancel":
+            observer.command_receipts.cancel(identity)
+            return
+        if call.data.get("phase") in ("submitted", "complete"):
+            observer.command_receipts.advance(
+                identity, call.data["phase"], observer.runtime.engine.generation, dt_util.now()
+            )
+            return
+        if call.data.get("phase") != "prepare":
+            raise ValueError("Invalid consequence phase")
+        entity = call.data.get("entity_id")
+        if entity not in observer.manual_precedence:
+            raise ValueError("Consequence entity is not managed")
+        observer.command_receipts.prepare(
+            identity, entity, call.data.get("expected"), call.data.get("context_id"),
+            observer.runtime.engine.generation, dt_util.now(),
+        )
+
+    hass.services.async_register(
+        DOMAIN, "track_command_consequence", async_track_command_consequence
+    )

@@ -81,7 +81,7 @@ def test_liquor_white_correct_under_every_lower_owner(owner):
             },
             "latest": True,
         }
-    states[LIQUOR] = {"state": "on", "attributes": {"brightness": 255, "color_temp_kelvin": 4000}}
+    states[LIQUOR] = {"state": "on", "attributes": {"brightness": 255, "color_temp_kelvin": 4000, "effect": "off"}}
     assert not verify(*args).issues
     assert not verify(*args).commands
 
@@ -141,7 +141,7 @@ def test_off_preserves_open_liquor_and_no_broad_group_command():
     args = world()
     args[0]["main_area"]["owner"] = "off"
     args[0]["liquor_cabinet"]["owner"] = "door"
-    args[1][LIQUOR] = {"state": "on", "attributes": {"brightness": 255, "color_temp_kelvin": 4000}}
+    args[1][LIQUOR] = {"state": "on", "attributes": {"brightness": 255, "color_temp_kelvin": 4000, "effect": "off"}}
     commands = verify(*args).commands
     assert len(commands) == len(args[3]["main_area"]) - 1
     assert all(c.entity != LIQUOR and c.service == "light.turn_off" for c in commands)

@@ -30,3 +30,36 @@ mark_command_consequence:
           options:
             - "appearance"
             - "off"
+
+track_command_consequence:
+  name: Track command consequence
+  description: >-
+    Internal metadata-only receipt lifecycle. Does not dispatch lighting commands
+    or create ownership. Pair with the matching legacy cabinet executor.
+  fields:
+    receipt_id:
+      required: true
+      selector:
+        text:
+    phase:
+      required: true
+      selector:
+        select:
+          options:
+            - prepare
+            - submitted
+            - complete
+            - cancel
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain: light
+    expected:
+      description: Native commanded fields, required for prepare only.
+      selector:
+        object:
+    context_id:
+      description: Dispatch context identity, required for prepare only.
+      selector:
+        text:
